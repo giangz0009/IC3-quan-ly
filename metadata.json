@@ -1,0 +1,6 @@
+{
+  "name": "IC3 Master Admin",
+  "description": "Hệ thống quản trị trường học, ngân hàng câu hỏi IC3 5 dạng, giao bài tập theo lớp, điều phối thi đấu Realtime và thống kê học tập.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
