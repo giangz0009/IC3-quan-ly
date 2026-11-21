@@ -170,18 +170,27 @@
       "userId": "teacher_admin_01",
       "fullName": "Thầy Nguyễn Hoàng Minh",
       "email": "admin@ic3master.edu.vn",
-      "password": "admin123",
-      "role": "super_admin",
-      "schoolId": null,
+      "password": "scrypt$535462e8b2cc52575f00f92e451ae79d$91b20d844d52456b254f12712b1ab8122522583580a9df49e284c6e546fd7a1cc213679034eab8c0adec6488faf1cb8ce76e4abf0b89a4aa84ec762d24c3134c",
+      "role": "master",
+      "status": "active",
       "createdAt": "2026-09-01T07:00:00.000Z"
+    },
+    {
+      "userId": "teacher_lv2_01",
+      "fullName": "Cô Phạm Minh Anh",
+      "email": "chuyenmon.lv2@ic3master.edu.vn",
+      "password": "scrypt$6151df2cc347a75b17471599826ec4f2$783da49748e1d4cbac1ee78e36c1eddf4334e0c3e1f5f0fd9382c33c3b5567dd37a37eb600b00a13b43c9605311bc2649ce6504f8749f5981c314a9ef9556255",
+      "role": "teacher_lv2",
+      "status": "active",
+      "createdAt": "2026-09-02T07:00:00.000Z"
     },
     {
       "userId": "teacher_nd_01",
       "fullName": "Cô Trần Thanh Hà",
-      "email": "ha.tran@nguyendu.edu.vn",
-      "password": "teacher123",
-      "role": "teacher",
-      "schoolId": "school_nd",
+      "email": "giangday.lv1@ic3master.edu.vn",
+      "password": "scrypt$59c1f72f6169e4d0047e24abcebe87fb$315a37595a9501bb433d0b20be3c7dd9cc3bd9b3429099553fad51033335ccfe1756aa0422e0fc904c2267b162454746e2153ce398bd34efd123a855834c6577",
+      "role": "teacher_lv1",
+      "status": "active",
       "createdAt": "2026-09-02T07:00:00.000Z"
     }
   ],

@@ -22,9 +22,9 @@
 ## 2. Mô tả Nghiệp vụ & Giao diện
 
 ### 2.1. Luồng Quản lý Phân cấp 4 bước (Drill-down)
-1. **Bước 1 — Mô-đun (Level):** Quản lý danh sách `ic3_modules` (mặc định `LV1`, `LV2`, `LV3`; cho phép thêm/sửa Mô-đun mới như `LV4`, chỉ cho xóa khi không còn nhóm/phần/câu hỏi con). Tự động gộp các `module` xuất hiện trong dữ liệu cũ dưới dạng bản ghi ảo (`virtual_mod_*`) để không bị sót.
-2. **Bước 2 — Nhóm kiến thức:** Lọc theo Mô-đun đã chọn (`GM`, `OT`, hoặc mã tùy chỉnh như `TH`, `BT`). Hỗ trợ thêm/sửa/xóa Nhóm (chỉ xóa khi chưa có phần/câu hỏi).
-3. **Bước 3 — Phần kiến thức (`knowledge_parts`):** Hiển thị các phần như `GM1`, `GM2`, `OT1`... kèm số lượng câu và dải thứ tự (`Câu min – Câu max`). Hỗ trợ thêm/sửa/xóa Phần (chỉ xóa khi chưa có câu hỏi).
+1. **Bước 1 — Mô-đun (Level):** Quản lý danh sách `ic3_modules` (mặc định `LV1`, `LV2`, `LV3`; cho phép thêm/sửa Mô-đun mới như `LV4` qua Modal Box, chỉ cho xóa khi không còn nhóm/phần/câu hỏi con). Tự động gộp các `module` xuất hiện trong dữ liệu cũ dưới dạng bản ghi ảo (`virtual_mod_*`) để không bị sót.
+2. **Bước 2 — Nhóm kiến thức:** Lọc theo Mô-đun đã chọn (`GM`, `OT`, hoặc mã tùy chỉnh như `TH`, `BT`). Hỗ trợ thêm/sửa Nhóm qua Modal Box và xóa Nhóm (chỉ xóa khi chưa có phần/câu hỏi).
+3. **Bước 3 — Phần kiến thức (`knowledge_parts`):** Hiển thị các phần như `GM1`, `GM2`, `OT1`... kèm số lượng câu và dải thứ tự (`Câu min – Câu max`). Hỗ trợ thêm/sửa Phần qua Modal Box và xóa Phần (chỉ xóa khi chưa có câu hỏi).
 4. **Bước 4 — Danh sách Câu hỏi theo Thứ tự (`topicOrder`):**
    - Hiển thị breadcrumb điều hướng nhanh giữa 4 tầng và nút `Quay lại`.
    - Bộ lọc kết hợp: **Tìm kiếm** (theo nội dung, tên phần/chủ đề, hoặc `"Câu 1"`, `"1"`), **Dạng câu hỏi (5 dạng)**. *(Đã loại bỏ trường và bộ lọc Độ khó).*
@@ -78,10 +78,13 @@
 
 ## 3. Quy tắc & Ràng buộc Xử lý
 
-1. **Ràng buộc xóa phân cấp:** Server (`server.ts`) và UI đều chặn xóa Mô-đun nếu còn Nhóm/Phần/Câu hỏi; chặn xóa Nhóm nếu còn Phần/Câu hỏi; chặn xóa Phần nếu còn Câu hỏi (`400 Bad Request`).
-2. **Sửa Mô-đun:** Không đổi `code` (khóa chính logic), nhưng nếu đổi `level` thì `server.ts` và `upsertModuleRaw` tự cập nhật đồng bộ `level` cho toàn bộ `knowledgeParts` và `questions` thuộc mô-đun đó.
-3. **Thứ tự câu hỏi (`topicOrder`):** Câu hỏi mới mặc định nhận `getNextTopicOrder(...)` = `max + 1` trong Phần kiến thức. Khi xóa 1 hoặc nhiều câu hỏi, hệ thống tự loại bỏ ID tương ứng khỏi `questionIds` của mọi `questionSets`.
-4. **Hành vi khi lỗi Supabase cục bộ:** Nếu lưu vào `server.ts` thành công nhưng bước đồng bộ Supabase bị lỗi (VD: mất mạng hoặc thiếu RLS), hệ thống giữ bản lưu cục bộ và hiển thị thông báo Toast cảnh báo/lỗi nổi ở góc dưới bên phải màn hình (`ToastContainer`) nêu rõ nguyên nhân.
+1. **Phân quyền Ngân hàng Câu hỏi (`canEdit` / `canManageSupabase`):**
+   - **GV Giảng dạy (`teacher_lv1`):** Chỉ có quyền **Xem** (hiển thị banner `[data-testid="qb-readonly-banner"]`), cho phép duyệt 4 tầng, tìm kiếm/lọc, xem Hotspot & xem Bộ đề; ẩn toàn bộ nút Thêm/Sửa/Xóa/Đảo thứ tự/Chọn nhiều/Đồng bộ Supabase và server trả `403` nếu gọi API ghi.
+   - **GV Chuyên môn (`teacher_lv2`) & Giáo viên Master (`master`):** Toàn quyền thêm/sửa/xóa/sắp xếp 4 tầng + Bộ đề + đồng bộ QB hai chiều với Supabase (riêng cấu hình URL/Key Supabase chỉ mở tab với `master`).
+2. **Ràng buộc xóa phân cấp:** Server (`server.ts`) và UI đều chặn xóa Mô-đun nếu còn Nhóm/Phần/Câu hỏi; chặn xóa Nhóm nếu còn Phần/Câu hỏi; chặn xóa Phần nếu còn Câu hỏi (`400 Bad Request`).
+3. **Sửa Mô-đun:** Không đổi `code` (khóa chính logic), nhưng nếu đổi `level` thì `server.ts` và `upsertModuleRaw` tự cập nhật đồng bộ `level` cho toàn bộ `knowledgeParts` và `questions` thuộc mô-đun đó.
+4. **Thứ tự câu hỏi (`topicOrder`):** Câu hỏi mới mặc định nhận `getNextTopicOrder(...)` = `max + 1` trong Phần kiến thức. Khi xóa 1 hoặc nhiều câu hỏi, hệ thống tự loại bỏ ID tương ứng khỏi `questionIds` của mọi `questionSets`.
+5. **Hành vi khi lỗi Supabase cục bộ:** Nếu lưu vào `server.ts` thành công nhưng bước đồng bộ Supabase bị lỗi (VD: mất mạng hoặc thiếu RLS), hệ thống giữ bản lưu cục bộ và hiển thị thông báo Toast cảnh báo/lỗi nổi ở góc dưới bên phải màn hình (`ToastContainer`) nêu rõ nguyên nhân.
 
 ---
 
@@ -94,6 +97,8 @@
 
 ## 5. Nhật ký thay đổi
 
+- **2026-11-21 (Modal Box Thêm/Sửa Mô-đun, Nhóm, Phần):** Chuyển toàn bộ biểu mẫu thêm/sửa Mô-đun, Nhóm kiến thức và Phần kiến thức trong `QuestionBankView.tsx` sang Modal Box (`role="dialog"`, `aria-modal="true"`) đồng nhất với Modal Câu hỏi và Bộ đề.
+- **2026-11-21 (Phân quyền LV1 Chỉ xem / LV2 & Master Toàn quyền):** Thêm prop `canEdit` và `canManageSupabase` vào `QuestionBankView`; tự động chuyển sang chế độ Chỉ xem với banner thông báo rõ ràng cho `teacher_lv1` và khóa toàn bộ route ghi trên `server.ts`.
 - **2026-11-20 (Tự động xóa ảnh Hotspot cũ trong Bucket khi Sửa & Xóa):** Bổ sung `deleteHotspotImagesFromSupabase` cùng `getObsoleteHotspotStoragePath` và `collectHotspotStoragePathsToDelete`; tự động xóa ảnh cũ khỏi bucket `hotspot-images` ngay sau khi giáo viên đổi ảnh và ấn **Lưu Câu hỏi**, cũng như khi xóa đơn lẻ hoặc xóa hàng loạt câu hỏi.
 - **2026-11-20 (Trì hoãn upload Storage tới lúc bấm "Lưu Câu hỏi"):** Sửa quy trình Hotspot để ảnh chọn từ máy hoặc dán `Ctrl + V` chỉ xem trước cục bộ (`pendingHotspotFile` + `blob:` preview), chỉ tải lên bucket `hotspot-images` trên Supabase Storage sau khi giáo viên bấm **Lưu Câu hỏi** và form hợp lệ (`shouldUploadHotspotFileOnSave`), tránh sinh file rác khi đổi ảnh hoặc hủy soạn.
 - **2026-11-20 (Hỗ trợ dán ảnh trực tiếp `Ctrl + V` cho Hotspot):** Bổ sung trình lắng nghe `paste` toàn modal khi đang soạn câu hỏi Hotspot (`extractImageFileFromClipboardData`), cho phép dán trực tiếp ảnh chụp màn hình từ clipboard (hoạt động song song với nút tải ảnh).

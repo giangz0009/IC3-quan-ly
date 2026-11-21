@@ -9,7 +9,7 @@
 
 | Lớp | File | Thành phần / Hàm chính |
 |---|---|---|
-| Frontend | `src/components/ClassTasksView.tsx` | Form cấu hình đợt bài tập, trình soạn danh sách nhiệm vụ, bảng theo dõi tiến độ & trạng thái giải lao từng học sinh |
+| Frontend | `src/components/ClassTasksView.tsx` | Thẻ tóm tắt cấu hình đợt bài tập & danh sách nhiệm vụ, Modal Box Sửa Thông tin chung, Modal Box Thêm/Sửa Nhiệm vụ, bảng theo dõi tiến độ & trạng thái giải lao từng học sinh |
 | Logic thuần | `src/utils/ic3Rules.ts` | `calculateIC3Score()`, `evaluateTaskCompletion()`, `isStudentBreakUnlocked()`, `formatDuration()` |
 | Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test tính điểm 0–1000 & điều kiện mở khóa giải lao theo số lượt và điểm sàn |
 | API Client | `src/utils/api.ts` | `saveClassTaskConfig()` |
@@ -23,13 +23,13 @@ Tab **Giao Bài tập Lớp** cho phép giáo viên thiết kế lộ trình bà
 
 ### 2.1. Cấu hình Chung của Đợt Bài tập (`ClassTaskConfig`)
 - Chọn **Lớp giao bài** từ dropdown (tên lớp + tên trường).
-- Thiết lập:
+- Hiển thị thẻ tóm tắt và bấm **Sửa Thông tin chung** để mở Modal Box chỉnh sửa:
   - **Tiêu đề đợt bài tập** (`assignmentTitle`, hiển thị trên trang chủ học sinh).
   - **Giáo viên giao bài** (`teacherName`).
   - **Thưởng Giải lao khi đạt 100%** (`breakRewardMinutes`, từ `0` đến `120` phút).
 
 ### 2.2. Danh sách Nhiệm vụ (`ClassTaskItem[]`)
-- Có thể thêm nhiều nhiệm vụ nối tiếp nhau, sắp xếp thứ tự (`ArrowUp` / `ArrowDown` để cập nhật `orderIndex`) hoặc xóa nhiệm vụ.
+- Bấm **Thêm Nhiệm vụ** hoặc bấm **Sửa** trên từng thẻ nhiệm vụ để mở Modal Box nhập/chỉnh sửa cấu hình, kèm sắp xếp thứ tự (`ArrowUp` / `ArrowDown` để cập nhật `orderIndex`) hoặc xóa nhiệm vụ.
 - Mỗi nhiệm vụ hỗ trợ **Áp nhanh từ Bộ đề** (`db.questionSets`) để điền tự động `title`, `level`, `category`, `contentCode`, `questionIds`, hoặc tự chỉnh tay:
   - **Chế độ làm bài (`quizMode`):** `Luyện tập (practice)` hoặc `Thi thử (exam)`.
   - **Cấp độ (`level`), Nhóm (`category`), Mã nội dung (`contentCode`), Bộ lọc Mô-đun (`moduleFilter`).**
@@ -69,4 +69,5 @@ Tab **Giao Bài tập Lớp** cho phép giáo viên thiết kế lộ trình bà
 
 ## 5. Nhật ký thay đổi
 
+- **2026-11-21 (Modal Box Thêm/Sửa):** Chuyển phần chỉnh sửa Thông tin chung đợt bài tập và Thêm/Sửa từng Nhiệm vụ sang Modal Box đồng nhất, hiển thị thẻ tóm tắt gọn trên giao diện chính.
 - **2026-11-20:** Rà soát và tài liệu hóa chi tiết cấu hình nhiệm vụ lớp và logic mở khóa giờ giải lao.

@@ -34,10 +34,19 @@ create table if not exists public.admin_teachers (
   user_id uuid primary key references auth.users(id) on delete cascade,
   full_name text not null,
   email text not null unique,
-  role text not null check (role in ('super_admin', 'teacher')) default 'teacher',
-  school_id text references public.schools(id) on delete set null,
+  role text not null check (role in ('teacher_lv1', 'teacher_lv2', 'master')) default 'teacher_lv1',
+  status text not null check (status in ('active', 'locked')) default 'active',
   created_at timestamptz not null default now()
 );
+
+-- Nâng cấp bảng admin_teachers nếu đang dùng schema cũ (super_admin/teacher + school_id)
+alter table public.admin_teachers drop constraint if exists admin_teachers_role_check;
+update public.admin_teachers set role = 'master' where role = 'super_admin';
+update public.admin_teachers set role = 'teacher_lv1' where role = 'teacher';
+alter table public.admin_teachers alter column role set default 'teacher_lv1';
+alter table public.admin_teachers add constraint admin_teachers_role_check check (role in ('teacher_lv1', 'teacher_lv2', 'master'));
+alter table public.admin_teachers add column if not exists status text not null default 'active' check (status in ('active', 'locked'));
+alter table public.admin_teachers drop column if exists school_id;
 
 -- =========================================================
 -- 2. NGÂN HÀNG CÂU HỎI & BỘ ĐỀ IC3
@@ -600,18 +609,27 @@ export function createSeedDatabase(): AdminDatabase {
         fullName: 'Thầy Nguyễn Hoàng Minh',
         email: 'admin@ic3master.edu.vn',
         password: 'admin123',
-        role: 'super_admin',
-        schoolId: null,
+        role: 'master',
+        status: 'active',
         createdAt: '2026-09-01T07:00:00.000Z',
+      },
+      {
+        userId: 'teacher_lv2_01',
+        fullName: 'Cô Phạm Minh Anh',
+        email: 'chuyenmon.lv2@ic3master.edu.vn',
+        password: 'teacher123',
+        role: 'teacher_lv2',
+        status: 'active',
+        createdAt: '2026-09-02T07:00:00.000Z',
       },
       {
         userId: 'teacher_nd_01',
         fullName: 'Cô Trần Thanh Hà',
-        email: 'ha.tran@nguyendu.edu.vn',
+        email: 'giangday.lv1@ic3master.edu.vn',
         password: 'teacher123',
-        role: 'teacher',
-        schoolId: 'school_nd',
-        createdAt: '2026-09-02T07:00:00.000Z',
+        role: 'teacher_lv1',
+        status: 'active',
+        createdAt: '2026-09-03T07:00:00.000Z',
       },
     ],
     modules: [

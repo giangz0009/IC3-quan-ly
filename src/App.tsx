@@ -10,6 +10,7 @@ import {
   LogOut,
   Menu,
   Moon,
+  ShieldCheck,
   Sun,
   Swords,
   X,
@@ -22,11 +23,13 @@ import { QuestionBankView } from './components/QuestionBankView';
 import { ReportsView } from './components/ReportsView';
 import { SchoolsStudentsView } from './components/SchoolsStudentsView';
 import { SupabaseView } from './components/SupabaseView';
+import { TeacherManagementView } from './components/TeacherManagementView';
 import { ToastContainer, type ToastItem } from './components/ToastContainer';
 import type { AdminDatabase } from './types/ic3';
-import { api, type SafeTeacher } from './utils/api';
+import { api, setAuthToken, type SafeTeacher } from './utils/api';
 import {
   formatSupabaseLoadingStatus,
+  getTeacherPermissions,
   resolveToastVariant,
   type SupabasePendingTask,
   type ToastVariant,
@@ -41,6 +44,7 @@ import {
 type NavTab =
   | 'overview'
   | 'schools'
+  | 'teachers'
   | 'questions'
   | 'tasks'
   | 'battle'
@@ -54,6 +58,7 @@ const NAV_ITEMS: Array<{
 }> = [
   { id: 'overview', label: 'Tổng quan', icon: LayoutDashboard },
   { id: 'schools', label: 'Trường & Học sinh', icon: Building2 },
+  { id: 'teachers', label: 'Quản lý Giáo viên', icon: ShieldCheck },
   { id: 'questions', label: 'Ngân hàng Câu hỏi', icon: BookOpenCheck },
   { id: 'tasks', label: 'Giao Bài tập Lớp', icon: ClipboardList },
   { id: 'battle', label: 'Thi đấu Realtime', icon: Swords },
@@ -61,7 +66,6 @@ const NAV_ITEMS: Array<{
   { id: 'supabase', label: 'Kết nối Supabase', icon: Database },
 ];
 
-const SESSION_TEACHER_KEY = 'ic3_admin_teacher_session';
 const THEME_KEY = 'ic3_admin_theme';
 
 export default function App() {
@@ -70,16 +74,7 @@ export default function App() {
     return window.localStorage.getItem(THEME_KEY) === 'dark';
   });
 
-  const [teacher, setTeacher] = useState<SafeTeacher | null>(() => {
-    if (typeof window === 'undefined') return null;
-    const saved = window.sessionStorage.getItem(SESSION_TEACHER_KEY);
-    if (!saved) return null;
-    try {
-      return JSON.parse(saved) as SafeTeacher;
-    } catch {
-      return null;
-    }
-  });
+  const [teacher, setTeacher] = useState<SafeTeacher | null>(null);
 
   const [activeTab, setActiveTab] = useState<NavTab>('overview');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -191,24 +186,22 @@ export default function App() {
         .login('admin@ic3master.edu.vn', 'admin123')
         .then(({ teacher: t }) => {
           setTeacher(t);
-          window.sessionStorage.setItem(SESSION_TEACHER_KEY, JSON.stringify(t));
         })
         .catch(() => {});
     }
   }, [teacher, refreshData]);
 
   function handleAuthenticated(loggedTeacher: SafeTeacher) {
+    setActiveTab('overview');
     setTeacher(loggedTeacher);
-    window.sessionStorage.setItem(
-      SESSION_TEACHER_KEY,
-      JSON.stringify(loggedTeacher)
-    );
   }
 
   function handleLogout() {
+    void api.logout();
+    setAuthToken(null);
     setTeacher(null);
     setDb(null);
-    window.sessionStorage.removeItem(SESSION_TEACHER_KEY);
+    setActiveTab('overview');
   }
 
   if (!teacher) {
@@ -221,25 +214,34 @@ export default function App() {
     );
   }
 
-  const currentNav = NAV_ITEMS.find((n) => n.id === activeTab)!;
-  const scopedSchoolId =
-    teacher.role === 'super_admin' ? null : teacher.schoolId;
+  const permissions = getTeacherPermissions(teacher.role);
+  const visibleNavItems = NAV_ITEMS.filter((item) => {
+    if (item.id === 'teachers') return permissions.canManageTeachers;
+    if (item.id === 'battle') return permissions.canHostBattle;
+    if (item.id === 'supabase') return permissions.canManageSupabase;
+    return true;
+  });
+  const effectiveTab: NavTab = visibleNavItems.some((n) => n.id === activeTab)
+    ? activeTab
+    : 'overview';
+  const currentNav = visibleNavItems.find((n) => n.id === effectiveTab)!;
+  const scopedSchoolId: string | null = null;
   const supabaseStatusText = formatSupabaseLoadingStatus(activeSupabaseTasks);
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex">
+    <div className="h-dvh overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex">
       {/* Desktop Sidebar (260px) */}
-      <aside className="hidden lg:flex lg:w-[260px] lg:shrink-0 lg:flex-col border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
-        <div className="h-16 px-5 flex items-center border-b border-slate-200 dark:border-slate-800">
+      <aside className="hidden lg:flex lg:w-[260px] lg:shrink-0 lg:flex-col h-full overflow-hidden border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+        <div className="h-16 shrink-0 px-5 flex items-center border-b border-slate-200 dark:border-slate-800">
           <span className="font-display text-base font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap">
             IC3 Master Admin
           </span>
         </div>
 
-        <nav aria-label="Điều hướng chính" className="flex-1 p-3 space-y-1">
-          {NAV_ITEMS.map((item) => {
+        <nav aria-label="Điều hướng chính" className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1">
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
-            const active = activeTab === item.id;
+            const active = effectiveTab === item.id;
             return (
               <button
                 key={item.id}
@@ -264,9 +266,7 @@ export default function App() {
               {teacher.fullName}
             </div>
             <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-              {teacher.role === 'super_admin'
-                ? 'Super Admin · Toàn hệ thống'
-                : 'Giáo viên Trường'}
+              {permissions.shortLabel} · Liên trường
             </div>
           </div>
           <button
@@ -287,8 +287,8 @@ export default function App() {
             className="fixed inset-0 bg-slate-950/50"
             onClick={() => setMobileMenuOpen(false)}
           />
-          <aside className="relative w-64 max-w-[80vw] bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-10">
-            <div className="h-14 px-4 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
+          <aside className="relative w-64 max-w-[80vw] h-full overflow-hidden bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-10">
+            <div className="h-14 shrink-0 px-4 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
               <span className="font-display text-base font-bold">
                 IC3 Master Admin
               </span>
@@ -301,10 +301,10 @@ export default function App() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <nav aria-label="Điều hướng di động" className="flex-1 p-3 space-y-1">
-              {NAV_ITEMS.map((item) => {
+            <nav aria-label="Điều hướng di động" className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1">
+              {visibleNavItems.map((item) => {
                 const Icon = item.icon;
-                const active = activeTab === item.id;
+                const active = effectiveTab === item.id;
                 return (
                   <button
                     key={item.id}
@@ -340,8 +340,8 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 px-4 sm:px-8 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between gap-4 sticky top-0 z-30">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden">
+        <header className="h-16 shrink-0 px-4 sm:px-8 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between gap-4 z-30">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
@@ -380,7 +380,8 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-8 max-w-7xl w-full mx-auto">
+        <main className="flex-1 min-h-0 overflow-y-auto w-full">
+          <div className="p-4 sm:p-8 max-w-7xl w-full mx-auto">
           {loadError && (
             <div
               role="alert"
@@ -419,30 +420,49 @@ export default function App() {
             </div>
           ) : db ? (
             <>
-              {activeTab === 'overview' && (
+              {effectiveTab === 'overview' && (
                 <OverviewView
                   db={db}
                   scopedSchoolId={scopedSchoolId}
                   onNavigate={setActiveTab}
                 />
               )}
-              {activeTab === 'schools' && (
+              {effectiveTab === 'schools' && (
                 <SchoolsStudentsView
+                  db={db}
+                  currentTeacher={teacher}
+                  onRefresh={refreshData}
+                  onNotify={notify}
+                  onOpenTeachersTab={
+                    permissions.canManageTeachers
+                      ? () => setActiveTab('teachers')
+                      : undefined
+                  }
+                />
+              )}
+              {effectiveTab === 'teachers' && permissions.canManageTeachers && (
+                <TeacherManagementView
                   db={db}
                   currentTeacher={teacher}
                   onRefresh={refreshData}
                   onNotify={notify}
                 />
               )}
-              {activeTab === 'questions' && (
+              {effectiveTab === 'questions' && (
                 <QuestionBankView
                   db={db}
+                  canEdit={permissions.canEditQuestionBank}
+                  canManageSupabase={permissions.canManageSupabase}
                   onRefresh={refreshData}
                   onNotify={notify}
-                  onOpenSupabase={() => setActiveTab('supabase')}
+                  onOpenSupabase={
+                    permissions.canManageSupabase
+                      ? () => setActiveTab('supabase')
+                      : undefined
+                  }
                 />
               )}
-              {activeTab === 'tasks' && (
+              {effectiveTab === 'tasks' && (
                 <ClassTasksView
                   db={db}
                   currentTeacher={teacher}
@@ -450,7 +470,7 @@ export default function App() {
                   onNotify={notify}
                 />
               )}
-              {activeTab === 'battle' && (
+              {effectiveTab === 'battle' && permissions.canHostBattle && (
                 <BattleControlView
                   db={db}
                   currentTeacher={teacher}
@@ -458,10 +478,10 @@ export default function App() {
                   onNotify={notify}
                 />
               )}
-              {activeTab === 'reports' && (
+              {effectiveTab === 'reports' && (
                 <ReportsView db={db} scopedSchoolId={scopedSchoolId} />
               )}
-              {activeTab === 'supabase' && (
+              {effectiveTab === 'supabase' && permissions.canManageSupabase && (
                 <SupabaseView
                   db={{ ...db, teachers: [] }}
                   onRefresh={refreshData}
@@ -470,6 +490,7 @@ export default function App() {
               )}
             </>
           ) : null}
+          </div>
         </main>
       </div>
 

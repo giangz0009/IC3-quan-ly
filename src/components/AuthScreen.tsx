@@ -48,8 +48,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col justify-between p-6">
-      <header className="max-w-6xl w-full mx-auto flex items-center justify-between py-2">
+    <div className="h-dvh overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col">
+      <header className="shrink-0 max-w-6xl w-full mx-auto flex items-center justify-between px-6 pt-6 pb-2">
         <div className="font-display text-lg font-bold tracking-tight whitespace-nowrap">
           IC3 Master Admin
         </div>
@@ -64,7 +64,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         </button>
       </header>
 
-      <main className="max-w-5xl w-full mx-auto my-auto grid grid-cols-1 lg:grid-cols-12 gap-10 items-center py-8">
+      <main className="flex-1 min-h-0 overflow-y-auto px-6 py-6 flex">
+        <div className="max-w-5xl w-full mx-auto my-auto grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
         <div className="lg:col-span-6 space-y-6">
           <div className="space-y-3">
             <p className="text-sm font-medium text-blue-600 dark:text-blue-400">
@@ -109,7 +110,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   Đăng nhập Giáo viên
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Xác thực phân quyền Quản trị viên hoặc Giáo viên trường
+                  Xác thực 3 cấp phân quyền quản lý liên trường (LV1, LV2, Master)
                 </p>
               </div>
             </div>
@@ -177,42 +178,71 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
             <div className="mt-6 pt-5 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
               <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                Truy cập nhanh tài khoản mẫu:
+                Truy cập nhanh 3 nhóm phân quyền mẫu:
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2">
                 <button
                   type="button"
                   disabled={loading}
                   onClick={() => quickLogin('admin@ic3master.edu.vn', 'admin123')}
-                  className="text-left px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                  className="text-left px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center justify-between gap-2"
                 >
-                  <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
-                    Super Admin
+                  <div>
+                    <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                      Giáo viên Master
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Không giới hạn quyền trên toàn hệ thống
+                    </div>
                   </div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                    Toàn hệ thống
-                  </div>
+                  <span className="font-mono text-[11px] text-blue-600 dark:text-blue-400 shrink-0">
+                    Master
+                  </span>
                 </button>
                 <button
                   type="button"
                   disabled={loading}
-                  onClick={() => quickLogin('ha.tran@nguyendu.edu.vn', 'teacher123')}
-                  className="text-left px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                  onClick={() => quickLogin('chuyenmon.lv2@ic3master.edu.vn', 'teacher123')}
+                  className="text-left px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center justify-between gap-2"
                 >
-                  <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
-                    Giáo viên Trường
+                  <div>
+                    <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                      GV Chuyên môn (LV2)
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Toàn quyền Ngân hàng đề + Bài tập + Thi đấu Realtime
+                    </div>
                   </div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                    THCS Nguyễn Du
+                  <span className="font-mono text-[11px] text-emerald-600 dark:text-emerald-400 shrink-0">
+                    LV2
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => quickLogin('giangday.lv1@ic3master.edu.vn', 'teacher123')}
+                  className="text-left px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center justify-between gap-2"
+                >
+                  <div>
+                    <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                      GV Giảng dạy (LV1)
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Chỉ xem Ngân hàng đề + Giao bài tập (không thi đấu)
+                    </div>
                   </div>
+                  <span className="font-mono text-[11px] text-amber-600 dark:text-amber-400 shrink-0">
+                    LV1
+                  </span>
                 </button>
               </div>
             </div>
           </div>
         </div>
+        </div>
       </main>
 
-      <footer className="max-w-6xl w-full mx-auto text-xs text-slate-500 dark:text-slate-400 flex items-center justify-between py-2 border-t border-slate-200 dark:border-slate-800">
+      <footer className="shrink-0 max-w-6xl w-full mx-auto text-xs text-slate-500 dark:text-slate-400 flex items-center justify-between px-6 py-4 border-t border-slate-200 dark:border-slate-800">
         <span>IC3 Master Admin Console</span>
         <span>Chuẩn chấm điểm IC3 1000 điểm · Hỗ trợ Supabase PostgreSQL</span>
       </footer>

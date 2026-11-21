@@ -6,6 +6,7 @@ import { formatDuration, isStudentBreakUnlocked } from '../utils/ic3Rules';
 type NavTab =
   | 'overview'
   | 'schools'
+  | 'teachers'
   | 'questions'
   | 'tasks'
   | 'battle'

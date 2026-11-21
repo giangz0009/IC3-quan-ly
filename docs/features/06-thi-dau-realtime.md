@@ -9,7 +9,7 @@
 
 | Lớp | File | Thành phần / Hàm chính |
 |---|---|---|
-| Frontend | `src/components/BattleControlView.tsx` | Chọn lớp, công tắc bật/tắt nút Thi đấu, form cấu hình luật, bảng xếp hạng Live & Nhật ký Sự kiện Realtime |
+| Frontend | `src/components/BattleControlView.tsx` | Chọn lớp, công tắc bật/tắt nút Thi đấu, thẻ tóm tắt & Modal Box chỉnh sửa cấu hình luật, bảng xếp hạng Live & Nhật ký Sự kiện Realtime |
 | Logic thuần | `src/utils/ic3Rules.ts` | `calculateIC3Score()`, `rankBattleParticipants()`, `formatDuration()` |
 | Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test xếp hạng ưu tiên Điểm giảm dần → Thời gian tăng dần & trao thưởng Top X |
 | API Client | `src/utils/api.ts` | `saveBattleConfig`, `createBattleRoom`, `joinBattleRoom`, `startBattleRoom`, `simulateBattleStep`, `finishBattleRoom`, `resetBattleRoom` |
@@ -19,11 +19,11 @@
 
 ## 2. Mô tả Nghiệp vụ & Giao diện
 
-Tab **Thi đấu Realtime** là phòng điều khiển cho phép giáo viên tổ chức giải đấu tốc độ cho từng lớp:
+Tab **Thi đấu Realtime** là phòng điều khiển cho phép giáo viên thuộc nhóm **GV Chuyên môn (`teacher_lv2`)** và **Giáo viên Master (`master`)** tổ chức giải đấu tốc độ cho **bất kỳ lớp nào trên tất cả các trường** trong hệ thống *(tài khoản **GV Giảng dạy `teacher_lv1`** không thấy tab này và bị chặn `403` trên toàn bộ API `/api/battle-*`)*:
 
 ### 2.1. Công tắc Tổng & Cấu hình Luật (`ClassBattleConfig`)
 - **Nút Thi đấu Học sinh (ĐANG BẬT / ĐANG KHÓA):** Lưu nhanh cờ `isEnabled` để mở hoặc khóa nút vào đấu trường bên ứng dụng học sinh.
-- **Cấu hình giải đấu:**
+- **Cấu hình giải đấu (Modal Box qua nút *Chỉnh sửa Cấu hình*):**
   - **Tên giải đấu lớp (`title`)**, **Giáo viên tổ chức (`teacherName`)**, **Bộ đề thi đấu (`questionSetId` → nạp `questionIds`)**.
   - **Thời gian trận (`timeLimitSeconds`):** tối thiểu 30 giây (mặc định 300s).
   - **Ngưỡng Combo 2 câu (`fastComboWindowSeconds`):** tối thiểu 5 giây (mặc định 15s).
@@ -46,12 +46,13 @@ Tab **Thi đấu Realtime** là phòng điều khiển cho phép giáo viên t�
 
 ## 3. Quy tắc & Ràng buộc Xử lý
 
-1. **Quy tắc xếp hạng (`rankBattleParticipants`):**
+1. **Phân quyền tổ chức (`requireRoles('teacher_lv2', 'master')`):** Tài khoản `teacher_lv1` bị ẩn tab trên giao diện và bị chặn `403 Forbidden` ở mọi route `/api/battle-configs/:classId` và `/api/battle-rooms*`.
+2. **Quy tắc xếp hạng (`rankBattleParticipants`):**
    - Sắp xếp theo: `score` giảm dần → `durationSeconds` tăng dần → `correctCount` giảm dần.
    - Các học sinh có `rank <= topRewardCount` được gán `rewardedBreakMinutes = config.breakRewardMinutes`, các hạng sau nhận `0`.
-2. **Cộng dồn Giờ Giải lao khi kết thúc (`finishBattleRoom`):**
+3. **Cộng dồn Giờ Giải lao khi kết thúc (`finishBattleRoom`):**
    - Với mỗi thí sinh có `rewardedBreakMinutes > 0`, server cộng thêm `rewardedBreakMinutes * 60` giây vào `totalGrantedSeconds` và `remainingSeconds` trong `db.breakStates` và đặt `status = 'active'`.
-3. **Cơ chế Thẻ Kỹ năng (trong `simulate-step`):**
+4. **Cơ chế Thẻ Kỹ năng (trong `simulate-step`):**
    - Khi trả lời đúng 2 câu liên tiếp trong `<= fastComboWindowSeconds`: có thể nhận **Thẻ Phòng Thủ (`+2 Khiên`)** hoặc tung **Thẻ Tấn Công** hiệu lực **6 giây** gồm 4 loại: `blur` (làm mờ), `frost` (đóng băng), `reverse` (đảo ngược phương án), `shake` (rung lắc).
    - Nếu mục tiêu còn `shieldCharges > 0`, đòn tấn công bị chặn (`shieldCharges - 1`, ghi nhận `attacksBlocked + 1` và event `blocked`).
 
@@ -67,4 +68,6 @@ Tab **Thi đấu Realtime** là phòng điều khiển cho phép giáo viên t�
 
 ## 5. Nhật ký thay đổi
 
+- **2026-11-21 (Modal Box Cấu hình Thi đấu):** Chuyển form *Cấu hình Luật & Bộ đề Thi đấu* sang Modal Box qua nút **Chỉnh sửa Cấu hình**, hiển thị thẻ tóm tắt thông số trận đấu trên giao diện chính.
+- **2026-11-21:** Mở phạm vi tổ chức Thi đấu cho mọi lớp trên tất cả các trường; giới hạn quyền tổ chức cho **GV Chuyên môn (LV2)** và **Giáo viên Master** (chặn LV1 cả UI lẫn API).
 - **2026-11-20:** Rà soát và tài liệu hóa toàn bộ vòng đời phòng thi đấu, luật Combo/Khiên/Debuff và giới hạn đồng bộ Realtime hiện tại.

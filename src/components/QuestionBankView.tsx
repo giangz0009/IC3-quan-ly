@@ -69,6 +69,8 @@ import { QuestionEditorModal, type QuestionDefaultContext } from './QuestionEdit
 
 interface QuestionBankViewProps {
   db: Omit<AdminDatabase, 'teachers'>;
+  canEdit?: boolean;
+  canManageSupabase?: boolean;
   onRefresh: () => Promise<void>;
   onNotify: (msg: string, isError?: boolean) => void;
   onOpenSupabase?: () => void;
@@ -83,6 +85,8 @@ function getDefaultLevelForModule(mod: IC3Module): IC3Level {
 
 export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   db,
+  canEdit = true,
+  canManageSupabase = false,
   onRefresh,
   onNotify,
   onOpenSupabase,
@@ -1209,7 +1213,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {supabaseReady ? (
+          {canEdit && (supabaseReady ? (
             <>
               <label className="inline-flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 whitespace-nowrap shrink-0 cursor-pointer">
                 <input
@@ -1247,7 +1251,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
               </button>
             </>
           ) : (
-            onOpenSupabase && (
+            canManageSupabase && onOpenSupabase && (
               <button
                 type="button"
                 onClick={onOpenSupabase}
@@ -1257,20 +1261,14 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                 <span>Kết nối CSDL Supabase</span>
               </button>
             )
-          )}
+          ))}
 
-          {subTab === 'questions' ? (
+          {canEdit && (subTab === 'questions' ? (
             <>
               {!selectedModule && (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (showModuleForm && !editingModuleRecord) {
-                      setShowModuleForm(false);
-                    } else {
-                      openNewModuleForm();
-                    }
-                  }}
+                  onClick={openNewModuleForm}
                   className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -1280,13 +1278,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
               {selectedModule && !selectedCategory && (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (showCategoryForm && !editingCategoryRecord) {
-                      setShowCategoryForm(false);
-                    } else {
-                      openNewCategoryForm();
-                    }
-                  }}
+                  onClick={openNewCategoryForm}
                   className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -1296,13 +1288,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
               {selectedModule && selectedCategory && !selectedPartCode && (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (showAddPartForm && !editingPartRecord) {
-                      setShowAddPartForm(false);
-                    } else {
-                      openNewPartForm();
-                    }
-                  }}
+                  onClick={openNewPartForm}
                   className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -1332,9 +1318,19 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
               <Plus className="w-3.5 h-3.5" />
               <span>Tạo Bộ đề mới</span>
             </button>
-          )}
+          ))}
         </div>
       </div>
+
+      {!canEdit && (
+        <div
+          role="status"
+          data-testid="qb-readonly-banner"
+          className="rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50/80 dark:bg-sky-950/40 px-4 py-3 text-xs text-sky-800 dark:text-sky-200"
+        >
+          <strong>Chế độ Chỉ xem (GV Giảng dạy · LV1):</strong> Bạn có thể tra cứu toàn bộ Mô-đun, Nhóm, Phần, Câu hỏi và Bộ đề để giao bài tập; quyền thêm, sửa, xóa Ngân hàng câu hỏi dành cho GV Chuyên môn (LV2) và Giáo viên Master.
+        </div>
+      )}
 
       {subTab === 'questions' ? (
         <div className="space-y-5">
@@ -1428,134 +1424,6 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                 </p>
               </div>
 
-              {showModuleForm && (
-                <form
-                  onSubmit={handleSaveModule}
-                  className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-3"
-                >
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
-                      {editingModuleRecord
-                        ? `Chỉnh sửa Mô-đun ${editingModuleRecord.level}`
-                        : 'Thêm Mô-đun (Level) mới'}
-                    </h3>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowModuleForm(false);
-                        setEditingModuleRecord(null);
-                      }}
-                      aria-label="Đóng biểu mẫu mô-đun"
-                      className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                    <div className="sm:col-span-2">
-                      <label htmlFor="mod-level" className="block text-xs font-medium mb-1">
-                        Level
-                      </label>
-                      <input
-                        id="mod-level"
-                        type="text"
-                        required
-                        placeholder="VD: LV4"
-                        value={moduleForm.level}
-                        onChange={(e) => {
-                          const lv = e.target.value;
-                          setModuleForm((prev) => ({
-                            ...prev,
-                            level: lv,
-                            code:
-                              !editingModuleRecord &&
-                              (!prev.code || prev.code.startsWith('module_'))
-                                ? `module_${lv.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_')}`
-                                : prev.code,
-                          }));
-                        }}
-                        className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                      />
-                    </div>
-                    <div className="sm:col-span-3">
-                      <label htmlFor="mod-code" className="block text-xs font-medium mb-1">
-                        Mã CSDL (code)
-                      </label>
-                      <input
-                        id="mod-code"
-                        type="text"
-                        required
-                        disabled={Boolean(editingModuleRecord)}
-                        placeholder="VD: digital_citizenship"
-                        value={moduleForm.code}
-                        onChange={(e) =>
-                          setModuleForm({ ...moduleForm, code: e.target.value })
-                        }
-                        className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 disabled:opacity-60"
-                      />
-                    </div>
-                    <div className="sm:col-span-3">
-                      <label htmlFor="mod-title" className="block text-xs font-medium mb-1">
-                        Tên Mô-đun
-                      </label>
-                      <input
-                        id="mod-title"
-                        type="text"
-                        required
-                        placeholder="VD: Trí tuệ nhân tạo (LV4)"
-                        value={moduleForm.title}
-                        onChange={(e) =>
-                          setModuleForm({ ...moduleForm, title: e.target.value })
-                        }
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                      />
-                    </div>
-                    <div className="sm:col-span-4">
-                      <label htmlFor="mod-desc" className="block text-xs font-medium mb-1">
-                        Mô tả ngắn (tùy chọn)
-                      </label>
-                      <input
-                        id="mod-desc"
-                        type="text"
-                        placeholder="Phạm vi kiến thức của Mô-đun..."
-                        value={moduleForm.description}
-                        onChange={(e) =>
-                          setModuleForm({ ...moduleForm, description: e.target.value })
-                        }
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex justify-end gap-2">
-                    <button
-                      type="button"
-                      disabled={savingModule}
-                      onClick={() => {
-                        setShowModuleForm(false);
-                        setEditingModuleRecord(null);
-                      }}
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-50 cursor-pointer"
-                    >
-                      Hủy
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={savingModule}
-                      className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                    >
-                      {savingModule && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      <span>
-                        {savingModule
-                          ? 'Đang lưu & đồng bộ...'
-                          : editingModuleRecord
-                            ? 'Cập nhật Mô-đun'
-                            : 'Lưu Mô-đun mới'}
-                      </span>
-                    </button>
-                  </div>
-                </form>
-              )}
-
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {allModules.map((item) => {
                   const modQuestions = db.questions.filter((q) => q.module === item.code);
@@ -1617,7 +1485,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
 
                       <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 text-xs">
                         <div className="flex items-center gap-1.5">
-                          {!isVirtual && (
+                          {canEdit && !isVirtual && (
                             <button
                               type="button"
                               aria-label={`Sửa mô-đun ${item.level}`}
@@ -1628,7 +1496,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                               <span>Sửa</span>
                             </button>
                           )}
-                          {canDelete && (
+                          {canEdit && canDelete && (
                             <button
                               type="button"
                               aria-label={`Xóa mô-đun ${item.level}`}
@@ -1673,125 +1541,21 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                 </p>
               </div>
 
-              {showCategoryForm && (
-                <form
-                  onSubmit={handleSaveCategory}
-                  className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-3"
-                >
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
-                      {editingCategoryRecord
-                        ? `Chỉnh sửa Nhóm ${editingCategoryRecord.code}`
-                        : `Thêm Nhóm kiến thức vào ${getLevelForModule(selectedModule)}`}
-                    </h3>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowCategoryForm(false);
-                        setEditingCategoryRecord(null);
-                      }}
-                      aria-label="Đóng biểu mẫu nhóm kiến thức"
-                      className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                    <div className="sm:col-span-3">
-                      <label htmlFor="cat-code" className="block text-xs font-medium mb-1">
-                        Mã nhóm
-                      </label>
-                      <input
-                        id="cat-code"
-                        type="text"
-                        required
-                        disabled={Boolean(editingCategoryRecord)}
-                        placeholder="VD: TH, BT..."
-                        value={categoryForm.code}
-                        onChange={(e) =>
-                          setCategoryForm({ ...categoryForm, code: e.target.value })
-                        }
-                        className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 disabled:opacity-60"
-                      />
-                    </div>
-                    <div className="sm:col-span-4">
-                      <label htmlFor="cat-title" className="block text-xs font-medium mb-1">
-                        Tên nhóm kiến thức
-                      </label>
-                      <input
-                        id="cat-title"
-                        type="text"
-                        required
-                        placeholder="VD: Nhóm TH — Thực hành chuyên sâu"
-                        value={categoryForm.title}
-                        onChange={(e) =>
-                          setCategoryForm({ ...categoryForm, title: e.target.value })
-                        }
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                      />
-                    </div>
-                    <div className="sm:col-span-5">
-                      <label htmlFor="cat-desc" className="block text-xs font-medium mb-1">
-                        Mô tả ngắn (tùy chọn)
-                      </label>
-                      <input
-                        id="cat-desc"
-                        type="text"
-                        placeholder="Nội dung trọng tâm của nhóm kiến thức..."
-                        value={categoryForm.description}
-                        onChange={(e) =>
-                          setCategoryForm({
-                            ...categoryForm,
-                            description: e.target.value,
-                          })
-                        }
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex justify-end gap-2">
-                    <button
-                      type="button"
-                      disabled={savingCategory}
-                      onClick={() => {
-                        setShowCategoryForm(false);
-                        setEditingCategoryRecord(null);
-                      }}
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-50 cursor-pointer"
-                    >
-                      Hủy
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={savingCategory}
-                      className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                    >
-                      {savingCategory && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      <span>
-                        {savingCategory
-                          ? 'Đang lưu & đồng bộ...'
-                          : editingCategoryRecord
-                            ? 'Cập nhật Nhóm'
-                            : 'Lưu Nhóm mới'}
-                      </span>
-                    </button>
-                  </div>
-                </form>
-              )}
-
               {currentModuleCategories.length === 0 ? (
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center space-y-3">
                   <p className="text-sm text-slate-500 dark:text-slate-400">
                     Mô-đun {getLevelForModule(selectedModule)} hiện chưa có nhóm kiến thức nào.
                   </p>
-                  <button
-                    type="button"
-                    onClick={openNewCategoryForm}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Thêm Nhóm kiến thức đầu tiên</span>
-                  </button>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={openNewCategoryForm}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Thêm Nhóm kiến thức đầu tiên</span>
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1852,7 +1616,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
 
                         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 text-xs">
                           <div className="flex items-center gap-1.5">
-                            {!isVirtual && (
+                            {canEdit && !isVirtual && (
                               <button
                                 type="button"
                                 aria-label={`Sửa nhóm ${cat.code}`}
@@ -1863,7 +1627,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                                 <span>Sửa</span>
                               </button>
                             )}
-                            {canDelete && (
+                            {canEdit && canDelete && (
                               <button
                                 type="button"
                                 aria-label={`Xóa nhóm ${cat.code}`}
@@ -1915,103 +1679,6 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                 </p>
               </div>
 
-              {showAddPartForm && (
-                <form
-                  onSubmit={handleSavePart}
-                  className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-3"
-                >
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
-                      {editingPartRecord
-                        ? `Chỉnh sửa Phần ${editingPartRecord.code}`
-                        : `Thêm Phần kiến thức vào ${getLevelForModule(selectedModule)} · ${selectedCategory}`}
-                    </h3>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowAddPartForm(false);
-                        setEditingPartRecord(null);
-                      }}
-                      aria-label="Đóng biểu mẫu phần kiến thức"
-                      className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                    <div className="sm:col-span-3">
-                      <label htmlFor="new-part-code" className="block text-xs font-medium mb-1">
-                        Mã phần
-                      </label>
-                      <input
-                        id="new-part-code"
-                        type="text"
-                        required
-                        disabled={Boolean(editingPartRecord)}
-                        placeholder={`${selectedCategory}${currentCategoryParts.length + 1}`}
-                        value={newPartCode}
-                        onChange={(e) => setNewPartCode(e.target.value)}
-                        className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 disabled:opacity-60"
-                      />
-                    </div>
-                    <div className="sm:col-span-4">
-                      <label htmlFor="new-part-title" className="block text-xs font-medium mb-1">
-                        Tên phần kiến thức
-                      </label>
-                      <input
-                        id="new-part-title"
-                        type="text"
-                        required
-                        placeholder="VD: Bảng tính & Biểu đồ nâng cao"
-                        value={newPartTitle}
-                        onChange={(e) => setNewPartTitle(e.target.value)}
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                      />
-                    </div>
-                    <div className="sm:col-span-5">
-                      <label htmlFor="new-part-desc" className="block text-xs font-medium mb-1">
-                        Mô tả ngắn (tùy chọn)
-                      </label>
-                      <input
-                        id="new-part-desc"
-                        type="text"
-                        placeholder="Nội dung trọng tâm của phần..."
-                        value={newPartDesc}
-                        onChange={(e) => setNewPartDesc(e.target.value)}
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex justify-end gap-2">
-                    <button
-                      type="button"
-                      disabled={savingPart}
-                      onClick={() => {
-                        setShowAddPartForm(false);
-                        setEditingPartRecord(null);
-                      }}
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-50 cursor-pointer"
-                    >
-                      Hủy
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={savingPart}
-                      className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                    >
-                      {savingPart && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      <span>
-                        {savingPart
-                          ? 'Đang lưu & đồng bộ...'
-                          : editingPartRecord
-                            ? 'Cập nhật Phần'
-                            : 'Lưu Phần mới'}
-                      </span>
-                    </button>
-                  </div>
-                </form>
-              )}
-
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {currentCategoryParts.map((part) => {
                   const qs = getPartQuestionsSorted(
@@ -2057,7 +1724,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
 
                       <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 text-xs">
                         <div className="flex items-center gap-1.5">
-                          {!isVirtual && (
+                          {canEdit && !isVirtual && (
                             <button
                               type="button"
                               aria-label={`Sửa phần ${part.code}`}
@@ -2068,7 +1735,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                               <span>Sửa</span>
                             </button>
                           )}
-                          {!isVirtual && qs.length === 0 && (
+                          {canEdit && !isVirtual && qs.length === 0 && (
                             <button
                               type="button"
                               aria-label={`Xóa phần ${part.code}`}
@@ -2122,7 +1789,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                   </h2>
                 </div>
 
-                {partQuestionsSorted.length > 0 && (
+                {canEdit && partQuestionsSorted.length > 0 && (
                   <div className="flex flex-wrap items-center gap-2 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100 dark:border-slate-800">
                     <span className="inline-flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
                       <ListOrdered className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
@@ -2191,7 +1858,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
               </div>
 
               {/* Bulk Selection & Actions Bar */}
-              {(filteredPartQuestions.length > 0 || activeSelectedQuestions.length > 0) && (
+              {canEdit && (filteredPartQuestions.length > 0 || activeSelectedQuestions.length > 0) && (
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-3">
                     <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-100 cursor-pointer select-none">
@@ -2290,13 +1957,15 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                     >
                       <div className="flex flex-wrap items-start justify-between gap-4">
                         <div className="flex items-start gap-3 max-w-3xl">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleQuestionSelection(q.id)}
-                            aria-label={`Chọn Câu ${q.topicOrder}: ${q.prompt}`}
-                            className="mt-1 h-4 w-4 rounded border-slate-300 dark:border-slate-600 text-blue-600 cursor-pointer shrink-0"
-                          />
+                          {canEdit && (
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleQuestionSelection(q.id)}
+                              aria-label={`Chọn Câu ${q.topicOrder}: ${q.prompt}`}
+                              className="mt-1 h-4 w-4 rounded border-slate-300 dark:border-slate-600 text-blue-600 cursor-pointer shrink-0"
+                            />
+                          )}
                           <div className="space-y-1.5">
                             <div className="text-xs text-slate-500 dark:text-slate-400">
                               <span className="font-mono font-bold text-blue-600 dark:text-blue-400 tabular-nums">
@@ -2317,68 +1986,70 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                           </div>
                         </div>
 
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {!hasActiveFilter && partQuestionsSorted.length > 1 && (
-                          <>
-                            <button
-                              type="button"
-                              aria-label={`Đưa Câu ${q.topicOrder} lên trước`}
-                              disabled={idx === 0 || movingQuestionId !== null || deletingQuestionId === q.id}
-                              onClick={() => handleMoveQuestion(q, -1)}
-                              className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
-                            >
-                              {movingQuestionId === q.id ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <ArrowUp className="w-3.5 h-3.5" />
-                              )}
-                            </button>
-                            <button
-                              type="button"
-                              aria-label={`Đưa Câu ${q.topicOrder} xuống sau`}
-                              disabled={
-                                idx === filteredPartQuestions.length - 1 ||
-                                movingQuestionId !== null ||
-                                deletingQuestionId === q.id
-                              }
-                              onClick={() => handleMoveQuestion(q, 1)}
-                              className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
-                            >
-                              {movingQuestionId === q.id ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <ArrowDown className="w-3.5 h-3.5" />
-                              )}
-                            </button>
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          disabled={deletingQuestionId === q.id}
-                          onClick={() => {
-                            setEditingQuestion(q);
-                            setShowQuestionModal(true);
-                          }}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                          <span>Sửa</span>
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`Xóa câu hỏi ${q.id}`}
-                          disabled={deletingQuestionId === q.id || deletingBatchQuestions}
-                          onClick={() => handleDeleteQuestion(q)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                        >
-                          {deletingQuestionId === q.id ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <Trash2 className="w-3.5 h-3.5" />
+                      {canEdit && (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {!hasActiveFilter && partQuestionsSorted.length > 1 && (
+                            <>
+                              <button
+                                type="button"
+                                aria-label={`Đưa Câu ${q.topicOrder} lên trước`}
+                                disabled={idx === 0 || movingQuestionId !== null || deletingQuestionId === q.id}
+                                onClick={() => handleMoveQuestion(q, -1)}
+                                className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                              >
+                                {movingQuestionId === q.id ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <ArrowUp className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                aria-label={`Đưa Câu ${q.topicOrder} xuống sau`}
+                                disabled={
+                                  idx === filteredPartQuestions.length - 1 ||
+                                  movingQuestionId !== null ||
+                                  deletingQuestionId === q.id
+                                }
+                                onClick={() => handleMoveQuestion(q, 1)}
+                                className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                              >
+                                {movingQuestionId === q.id ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <ArrowDown className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </>
                           )}
-                          <span>{deletingQuestionId === q.id ? 'Đang xóa...' : 'Xóa'}</span>
-                        </button>
-                      </div>
+                          <button
+                            type="button"
+                            disabled={deletingQuestionId === q.id}
+                            onClick={() => {
+                              setEditingQuestion(q);
+                              setShowQuestionModal(true);
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>Sửa</span>
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Xóa câu hỏi ${q.id}`}
+                            disabled={deletingQuestionId === q.id || deletingBatchQuestions}
+                            onClick={() => handleDeleteQuestion(q)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            {deletingQuestionId === q.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-3.5 h-3.5" />
+                            )}
+                            <span>{deletingQuestionId === q.id ? 'Đang xóa...' : 'Xóa'}</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {/* Compact Answer Summary */}
@@ -2469,7 +2140,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                         ? `Phần ${selectedPartCode} hiện chưa có câu hỏi nào.`
                         : 'Không có câu hỏi nào phù hợp bộ lọc trong phần này.'}
                     </p>
-                    {partQuestionsSorted.length === 0 && (
+                    {canEdit && partQuestionsSorted.length === 0 && (
                       <button
                         type="button"
                         onClick={() => {
@@ -2511,31 +2182,33 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                   {set.description || 'Không có mô tả.'}
                 </p>
               </div>
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
-                <button
-                  type="button"
-                  disabled={deletingSetId === set.id}
-                  onClick={() => openEditSet(set)}
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
-                >
-                  Chỉnh sửa Bộ đề
-                </button>
-                <button
-                  type="button"
-                  disabled={deletingSetId === set.id}
-                  onClick={() => handleDeleteSet(set)}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  {deletingSetId === set.id && <Loader2 className="w-3 h-3 animate-spin" />}
-                  <span>{deletingSetId === set.id ? 'Đang xóa...' : 'Xóa'}</span>
-                </button>
-              </div>
+              {canEdit && (
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+                  <button
+                    type="button"
+                    disabled={deletingSetId === set.id}
+                    onClick={() => openEditSet(set)}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+                  >
+                    Chỉnh sửa Bộ đề
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deletingSetId === set.id}
+                    onClick={() => handleDeleteSet(set)}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {deletingSetId === set.id && <Loader2 className="w-3 h-3 animate-spin" />}
+                    <span>{deletingSetId === set.id ? 'Đang xóa...' : 'Xóa'}</span>
+                  </button>
+                </div>
+              )}
             </article>
           ))}
         </div>
       )}
 
-      {showQuestionModal && (
+      {canEdit && showQuestionModal && (
         <QuestionEditorModal
           initialQuestion={editingQuestion}
           defaultContext={defaultQuestionContext}
@@ -2727,6 +2400,393 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                 >
                   {savingSet && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                   <span>{savingSet ? 'Đang lưu & đồng bộ...' : 'Lưu Bộ đề'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Thêm / Sửa Mô-đun (Level) */}
+      {canEdit && showModuleForm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="module-modal-title"
+          className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4"
+          onClick={() => {
+            if (!savingModule) {
+              setShowModuleForm(false);
+              setEditingModuleRecord(null);
+            }
+          }}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-lg shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800">
+              <h3
+                id="module-modal-title"
+                className="font-display text-base font-semibold text-slate-900 dark:text-white"
+              >
+                {editingModuleRecord
+                  ? `Chỉnh sửa Mô-đun ${editingModuleRecord.level}`
+                  : 'Thêm Mô-đun (Level) mới'}
+              </h3>
+              <button
+                type="button"
+                disabled={savingModule}
+                onClick={() => {
+                  setShowModuleForm(false);
+                  setEditingModuleRecord(null);
+                }}
+                aria-label="Đóng biểu mẫu mô-đun"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveModule} className="p-6 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="mod-level" className="block text-xs font-medium mb-1">
+                    Level
+                  </label>
+                  <input
+                    id="mod-level"
+                    type="text"
+                    required
+                    placeholder="VD: LV4"
+                    value={moduleForm.level}
+                    onChange={(e) => {
+                      const lv = e.target.value;
+                      setModuleForm((prev) => ({
+                        ...prev,
+                        level: lv,
+                        code:
+                          !editingModuleRecord &&
+                          (!prev.code || prev.code.startsWith('module_'))
+                            ? `module_${lv.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_')}`
+                            : prev.code,
+                      }));
+                    }}
+                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="mod-code" className="block text-xs font-medium mb-1">
+                    Mã CSDL (code)
+                  </label>
+                  <input
+                    id="mod-code"
+                    type="text"
+                    required
+                    disabled={Boolean(editingModuleRecord)}
+                    placeholder="VD: digital_citizenship"
+                    value={moduleForm.code}
+                    onChange={(e) =>
+                      setModuleForm({ ...moduleForm, code: e.target.value })
+                    }
+                    className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 disabled:opacity-60"
+                  />
+                </div>
+              </div>
+              <div>
+                <label htmlFor="mod-title" className="block text-xs font-medium mb-1">
+                  Tên Mô-đun
+                </label>
+                <input
+                  id="mod-title"
+                  type="text"
+                  required
+                  placeholder="VD: Trí tuệ nhân tạo (LV4)"
+                  value={moduleForm.title}
+                  onChange={(e) =>
+                    setModuleForm({ ...moduleForm, title: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                />
+              </div>
+              <div>
+                <label htmlFor="mod-desc" className="block text-xs font-medium mb-1">
+                  Mô tả ngắn (tùy chọn)
+                </label>
+                <input
+                  id="mod-desc"
+                  type="text"
+                  placeholder="Phạm vi kiến thức của Mô-đun..."
+                  value={moduleForm.description}
+                  onChange={(e) =>
+                    setModuleForm({ ...moduleForm, description: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={savingModule}
+                  onClick={() => {
+                    setShowModuleForm(false);
+                    setEditingModuleRecord(null);
+                  }}
+                  className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-50 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingModule}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {savingModule && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>
+                    {savingModule
+                      ? 'Đang lưu & đồng bộ...'
+                      : editingModuleRecord
+                        ? 'Cập nhật Mô-đun'
+                        : 'Lưu Mô-đun mới'}
+                  </span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Thêm / Sửa Nhóm kiến thức */}
+      {canEdit && showCategoryForm && selectedModule && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="category-modal-title"
+          className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4"
+          onClick={() => {
+            if (!savingCategory) {
+              setShowCategoryForm(false);
+              setEditingCategoryRecord(null);
+            }
+          }}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-lg shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800">
+              <h3
+                id="category-modal-title"
+                className="font-display text-base font-semibold text-slate-900 dark:text-white"
+              >
+                {editingCategoryRecord
+                  ? `Chỉnh sửa Nhóm ${editingCategoryRecord.code}`
+                  : `Thêm Nhóm kiến thức vào ${getLevelForModule(selectedModule)}`}
+              </h3>
+              <button
+                type="button"
+                disabled={savingCategory}
+                onClick={() => {
+                  setShowCategoryForm(false);
+                  setEditingCategoryRecord(null);
+                }}
+                aria-label="Đóng biểu mẫu nhóm kiến thức"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveCategory} className="p-6 space-y-4">
+              <div>
+                <label htmlFor="cat-code" className="block text-xs font-medium mb-1">
+                  Mã nhóm
+                </label>
+                <input
+                  id="cat-code"
+                  type="text"
+                  required
+                  disabled={Boolean(editingCategoryRecord)}
+                  placeholder="VD: TH, BT..."
+                  value={categoryForm.code}
+                  onChange={(e) =>
+                    setCategoryForm({ ...categoryForm, code: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 disabled:opacity-60"
+                />
+              </div>
+              <div>
+                <label htmlFor="cat-title" className="block text-xs font-medium mb-1">
+                  Tên nhóm kiến thức
+                </label>
+                <input
+                  id="cat-title"
+                  type="text"
+                  required
+                  placeholder="VD: Nhóm TH — Thực hành chuyên sâu"
+                  value={categoryForm.title}
+                  onChange={(e) =>
+                    setCategoryForm({ ...categoryForm, title: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                />
+              </div>
+              <div>
+                <label htmlFor="cat-desc" className="block text-xs font-medium mb-1">
+                  Mô tả ngắn (tùy chọn)
+                </label>
+                <input
+                  id="cat-desc"
+                  type="text"
+                  placeholder="Nội dung trọng tâm của nhóm kiến thức..."
+                  value={categoryForm.description}
+                  onChange={(e) =>
+                    setCategoryForm({
+                      ...categoryForm,
+                      description: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={savingCategory}
+                  onClick={() => {
+                    setShowCategoryForm(false);
+                    setEditingCategoryRecord(null);
+                  }}
+                  className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-50 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingCategory}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {savingCategory && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>
+                    {savingCategory
+                      ? 'Đang lưu & đồng bộ...'
+                      : editingCategoryRecord
+                        ? 'Cập nhật Nhóm'
+                        : 'Lưu Nhóm mới'}
+                  </span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Thêm / Sửa Phần kiến thức */}
+      {canEdit && showAddPartForm && selectedModule && selectedCategory && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="part-modal-title"
+          className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4"
+          onClick={() => {
+            if (!savingPart) {
+              setShowAddPartForm(false);
+              setEditingPartRecord(null);
+            }
+          }}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-lg shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800">
+              <h3
+                id="part-modal-title"
+                className="font-display text-base font-semibold text-slate-900 dark:text-white"
+              >
+                {editingPartRecord
+                  ? `Chỉnh sửa Phần ${editingPartRecord.code}`
+                  : `Thêm Phần kiến thức vào ${getLevelForModule(selectedModule)} · ${selectedCategory}`}
+              </h3>
+              <button
+                type="button"
+                disabled={savingPart}
+                onClick={() => {
+                  setShowAddPartForm(false);
+                  setEditingPartRecord(null);
+                }}
+                aria-label="Đóng biểu mẫu phần kiến thức"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleSavePart} className="p-6 space-y-4">
+              <div>
+                <label htmlFor="new-part-code" className="block text-xs font-medium mb-1">
+                  Mã phần
+                </label>
+                <input
+                  id="new-part-code"
+                  type="text"
+                  required
+                  disabled={Boolean(editingPartRecord)}
+                  placeholder={`${selectedCategory}${currentCategoryParts.length + 1}`}
+                  value={newPartCode}
+                  onChange={(e) => setNewPartCode(e.target.value)}
+                  className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 disabled:opacity-60"
+                />
+              </div>
+              <div>
+                <label htmlFor="new-part-title" className="block text-xs font-medium mb-1">
+                  Tên phần kiến thức
+                </label>
+                <input
+                  id="new-part-title"
+                  type="text"
+                  required
+                  placeholder="VD: Bảng tính & Biểu đồ nâng cao"
+                  value={newPartTitle}
+                  onChange={(e) => setNewPartTitle(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                />
+              </div>
+              <div>
+                <label htmlFor="new-part-desc" className="block text-xs font-medium mb-1">
+                  Mô tả ngắn (tùy chọn)
+                </label>
+                <input
+                  id="new-part-desc"
+                  type="text"
+                  placeholder="Nội dung trọng tâm của phần..."
+                  value={newPartDesc}
+                  onChange={(e) => setNewPartDesc(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={savingPart}
+                  onClick={() => {
+                    setShowAddPartForm(false);
+                    setEditingPartRecord(null);
+                  }}
+                  className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-50 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingPart}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {savingPart && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>
+                    {savingPart
+                      ? 'Đang lưu & đồng bộ...'
+                      : editingPartRecord
+                        ? 'Cập nhật Phần'
+                        : 'Lưu Phần mới'}
+                  </span>
                 </button>
               </div>
             </form>

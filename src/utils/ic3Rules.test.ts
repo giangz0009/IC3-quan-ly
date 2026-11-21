@@ -5,10 +5,12 @@ import {
   buildQuestionBankSupabasePayload,
   buildReorderedPartUpdates,
   calculateIC3Score,
+  canDeleteOrDemoteMaster,
   collectHotspotStoragePathsToDelete,
   evaluateTaskCompletion,
   extractHotspotStoragePathFromUrl,
   extractImageFileFromClipboardData,
+  filterTeachers,
   formatQuestionOrderSummary,
   formatSubmissionsToCsv,
   formatSupabaseLoadingStatus,
@@ -17,9 +19,13 @@ import {
   getNextTopicOrder,
   getObsoleteHotspotStoragePath,
   getPartQuestionsSorted,
+  getTeacherPermissionDetails,
+  getTeacherPermissions,
   gradeQuestion,
   isPassingIC3Score,
   isStudentBreakUnlocked,
+  normalizeAdminRole,
+  normalizeTeacherStatus,
   normalizeVietnamesePassword,
   parseStudentsCsv,
   pickQuestionsBySelectedIds,
@@ -27,6 +33,8 @@ import {
   resolveToastVariant,
   shouldUploadHotspotFileOnSave,
   sliceQuestionsByOrderRange,
+  summarizeTeachersByRole,
+  summarizeTeacherStatuses,
   toggleSelectAllVisibleIds,
   validateStudentPassword,
 } from './ic3Rules';
@@ -804,6 +812,114 @@ test('resolveToastVariant classifies success, warning, error, and info accuratel
   assert.equal(resolveToastVariant('Thông báo tùy chỉnh', 'info'), 'info');
 });
 
+test('normalizeAdminRole and getTeacherPermissions enforce 3 cross-school tiers', () => {
+  assert.equal(normalizeAdminRole('super_admin'), 'master');
+  assert.equal(normalizeAdminRole('teacher'), 'teacher_lv1');
+  assert.equal(normalizeAdminRole('teacher_lv2'), 'teacher_lv2');
+  assert.equal(normalizeAdminRole('master'), 'master');
+
+  const lv1 = getTeacherPermissions('teacher_lv1');
+  assert.equal(lv1.canAccessAllSchools, true);
+  assert.equal(lv1.canAssignClassTasks, true);
+  assert.equal(lv1.canEditQuestionBank, false);
+  assert.equal(lv1.canHostBattle, false);
+  assert.equal(lv1.canManageSchools, false);
+  assert.equal(lv1.canManageTeachers, false);
+  assert.equal(lv1.canManageSupabase, false);
+
+  const lv2 = getTeacherPermissions('teacher_lv2');
+  assert.equal(lv2.canAccessAllSchools, true);
+  assert.equal(lv2.canAssignClassTasks, true);
+  assert.equal(lv2.canEditQuestionBank, true);
+  assert.equal(lv2.canHostBattle, true);
+  assert.equal(lv2.canManageSchools, false);
+  assert.equal(lv2.canManageTeachers, false);
+  assert.equal(lv2.canManageSupabase, false);
+
+  const master = getTeacherPermissions('master');
+  assert.equal(master.canAccessAllSchools, true);
+  assert.equal(master.canAssignClassTasks, true);
+  assert.equal(master.canEditQuestionBank, true);
+  assert.equal(master.canHostBattle, true);
+  assert.equal(master.canManageSchools, true);
+  assert.equal(master.canManageTeachers, true);
+  assert.equal(master.canManageSupabase, true);
+});
+
+test('canDeleteOrDemoteMaster protects the last Master account', () => {
+  const oneMaster = [
+    { userId: 'u1', role: 'master' },
+    { userId: 'u2', role: 'teacher_lv2' },
+  ];
+  assert.equal(canDeleteOrDemoteMaster(oneMaster, 'u1').ok, false);
+  assert.equal(canDeleteOrDemoteMaster(oneMaster, 'u1', 'teacher_lv2').ok, false);
+  assert.equal(canDeleteOrDemoteMaster(oneMaster, 'u2').ok, true);
+
+  const twoMasters = [
+    { userId: 'u1', role: 'master' },
+    { userId: 'u2', role: 'master' },
+  ];
+  assert.equal(canDeleteOrDemoteMaster(twoMasters, 'u1').ok, true);
+  assert.equal(canDeleteOrDemoteMaster(twoMasters, 'u1', 'teacher_lv1').ok, true);
+});
+
+test('filterTeachers and summarizeTeachersByRole accurately count and filter across all 3 tiers', () => {
+  const sample = [
+    { userId: '1', fullName: 'Thầy Minh', email: 'minh@ic3.vn', role: 'master' },
+    { userId: '2', fullName: 'Cô Lan', email: 'lan@ic3.vn', role: 'teacher_lv2' },
+    { userId: '3', fullName: 'Cô Hà', email: 'ha@ic3.vn', role: 'teacher_lv1' },
+    { userId: '4', fullName: 'Thầy Nam (cũ)', email: 'nam@ic3.vn', role: 'teacher' },
+  ];
+
+  const summary = summarizeTeachersByRole(sample);
+  assert.deepEqual(summary, {
+    teacher_lv1: 2,
+    teacher_lv2: 1,
+    master: 1,
+    total: 4,
+  });
+
+  assert.equal(filterTeachers(sample, '', 'all').length, 4);
+  assert.equal(filterTeachers(sample, '', 'teacher_lv1').length, 2);
+  assert.equal(filterTeachers(sample, 'lan@', 'all').length, 1);
+  assert.equal(filterTeachers(sample, 'minh', 'teacher_lv2').length, 0);
+});
+
+test('normalizeTeacherStatus, summarizeTeacherStatuses, status filter, and last-active-Master lock guard work accurately', () => {
+  assert.equal(normalizeTeacherStatus(undefined), 'active');
+  assert.equal(normalizeTeacherStatus('locked'), 'locked');
+
+  const sample = [
+    { userId: 'u1', fullName: 'Thầy Minh', email: 'm@ic3.vn', role: 'master', status: 'active' },
+    { userId: 'u2', fullName: 'Cô Anh', email: 'a@ic3.vn', role: 'teacher_lv2', status: 'locked' },
+    { userId: 'u3', fullName: 'Cô Hà', email: 'h@ic3.vn', role: 'teacher_lv1' },
+  ];
+
+  assert.deepEqual(summarizeTeacherStatuses(sample), {
+    active: 2,
+    locked: 1,
+    total: 3,
+  });
+
+  assert.equal(filterTeachers(sample, '', 'all', 'active').length, 2);
+  assert.equal(filterTeachers(sample, '', 'all', 'locked').length, 1);
+  assert.equal(filterTeachers(sample, '', 'teacher_lv2', 'locked').length, 1);
+
+  // Locking the only active Master account must be rejected
+  assert.equal(canDeleteOrDemoteMaster(sample, 'u1', 'master', 'locked').ok, false);
+  assert.equal(canDeleteOrDemoteMaster(sample, 'u2', 'teacher_lv2', 'active').ok, true);
+});
+
+test('getTeacherPermissionDetails returns accurate 7-item permission breakdown per role', () => {
+  const lv1 = getTeacherPermissionDetails('teacher_lv1');
+  const lv2 = getTeacherPermissionDetails('teacher_lv2');
+  const master = getTeacherPermissionDetails('master');
+
+  assert.equal(lv1.length, 7);
+  assert.equal(lv1.filter((p) => p.allowed).length, 3);
+  assert.equal(lv2.filter((p) => p.allowed).length, 5);
+  assert.equal(master.filter((p) => p.allowed).length, 7);
+});
 
 
 

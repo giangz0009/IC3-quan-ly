@@ -1,5 +1,6 @@
 import type {
   AdminDatabase,
+  AdminRole,
   AdminTeacher,
   BattleRoomState,
   ClassBattleConfig,
@@ -12,31 +13,64 @@ import type {
   School,
   SchoolClass,
   StudentProfile,
+  TeacherAccountStatus,
 } from '../types/ic3';
 
 export type SafeTeacher = Omit<AdminTeacher, 'password'>;
 
+let memoryAuthToken: string | null = null;
+
+export function setAuthToken(token: string | null): void {
+  memoryAuthToken = token;
+}
+
+export function getAuthToken(): string | null {
+  return memoryAuthToken;
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  const authHeaders: Record<string, string> = memoryAuthToken
+    ? { Authorization: `Bearer ${memoryAuthToken}` }
+    : {};
   const res = await fetch(url, {
+    ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...authHeaders,
       ...(options?.headers ?? {}),
     },
-    ...options,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    if (res.status === 401) {
+      memoryAuthToken = null;
+    }
     throw new Error(data.error || `Lỗi máy chủ (${res.status})`);
   }
   return data as T;
 }
 
 export const api = {
-  login(email: string, password: string) {
-    return request<{ teacher: SafeTeacher }>('/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    });
+  async login(email: string, password: string) {
+    const result = await request<{ teacher: SafeTeacher; token: string }>(
+      '/api/auth/login',
+      {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      }
+    );
+    setAuthToken(result.token);
+    return result;
+  },
+
+  async logout() {
+    try {
+      if (memoryAuthToken) {
+        await request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' });
+      }
+    } finally {
+      setAuthToken(null);
+    }
   },
 
   bootstrap() {
@@ -49,11 +83,27 @@ export const api = {
     fullName: string;
     email: string;
     password: string;
-    role: 'super_admin' | 'teacher';
-    schoolId: string | null;
+    role: AdminRole;
+    status?: TeacherAccountStatus;
   }) {
     return request<SafeTeacher>('/api/teachers', {
       method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateTeacher(
+    userId: string,
+    payload: {
+      fullName?: string;
+      email?: string;
+      password?: string;
+      role?: AdminRole;
+      status?: TeacherAccountStatus;
+    }
+  ) {
+    return request<SafeTeacher>(`/api/teachers/${userId}`, {
+      method: 'PUT',
       body: JSON.stringify(payload),
     });
   },

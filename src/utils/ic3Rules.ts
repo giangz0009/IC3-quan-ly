@@ -2,6 +2,7 @@ import {
   CATEGORY_LABELS,
   MODULE_LABELS,
   QUESTION_DEFAULT_INSTRUCTIONS,
+  type AdminRole,
   type AdminTaskStatRecord,
   type BattleParticipant,
   type BattleRankedResult,
@@ -18,6 +19,7 @@ import {
   type QuestionType,
   type SchoolClass,
   type StudentProfile,
+  type TeacherAccountStatus,
 } from '../types/ic3';
 
 /**
@@ -965,6 +967,241 @@ export function resolveToastVariant(
   return isInfoMessage ? 'info' : 'success';
 }
 
+export interface TeacherPermissions {
+  role: AdminRole;
+  label: string;
+  shortLabel: string;
+  description: string;
+  canAccessAllSchools: boolean;
+  canManageSchools: boolean;
+  canManageTeachers: boolean;
+  canEditQuestionBank: boolean;
+  canAssignClassTasks: boolean;
+  canHostBattle: boolean;
+  canManageSupabase: boolean;
+}
 
+export const ADMIN_ROLE_LIST: AdminRole[] = ['teacher_lv1', 'teacher_lv2', 'master'];
 
+export const ADMIN_ROLE_PERMISSIONS: Record<AdminRole, TeacherPermissions> = {
+  teacher_lv1: {
+    role: 'teacher_lv1',
+    label: 'Giáo viên Giảng dạy (LV1)',
+    shortLabel: 'GV Giảng dạy (LV1)',
+    description:
+      'Quản lý lớp & học sinh các trường, xem Ngân hàng câu hỏi (chỉ đọc) và giao bài tập. Không chỉnh sửa Ngân hàng câu hỏi, không tổ chức Thi đấu Realtime.',
+    canAccessAllSchools: true,
+    canManageSchools: false,
+    canManageTeachers: false,
+    canEditQuestionBank: false,
+    canAssignClassTasks: true,
+    canHostBattle: false,
+    canManageSupabase: false,
+  },
+  teacher_lv2: {
+    role: 'teacher_lv2',
+    label: 'Giáo viên Chuyên môn (LV2)',
+    shortLabel: 'GV Chuyên môn (LV2)',
+    description:
+      'Quản lý lớp & học sinh các trường, toàn quyền Ngân hàng câu hỏi & Bộ đề, giao bài tập và tổ chức Thi đấu Realtime.',
+    canAccessAllSchools: true,
+    canManageSchools: false,
+    canManageTeachers: false,
+    canEditQuestionBank: true,
+    canAssignClassTasks: true,
+    canHostBattle: true,
+    canManageSupabase: false,
+  },
+  master: {
+    role: 'master',
+    label: 'Giáo viên Master',
+    shortLabel: 'Giáo viên Master',
+    description:
+      'Không giới hạn quyền trên toàn hệ thống: quản trị Trường học, phân quyền Giáo viên, cấu hình Supabase và mọi nghiệp vụ học vụ.',
+    canAccessAllSchools: true,
+    canManageSchools: true,
+    canManageTeachers: true,
+    canEditQuestionBank: true,
+    canAssignClassTasks: true,
+    canHostBattle: true,
+    canManageSupabase: true,
+  },
+};
 
+export function normalizeAdminRole(role?: string | null): AdminRole {
+  if (role === 'master' || role === 'super_admin') return 'master';
+  if (role === 'teacher_lv2') return 'teacher_lv2';
+  return 'teacher_lv1';
+}
+
+export interface TeacherPermissionDetailItem {
+  key: string;
+  label: string;
+  description: string;
+  allowed: boolean;
+}
+
+export function getTeacherPermissionDetails(
+  role?: string | null
+): TeacherPermissionDetailItem[] {
+  const perms = getTeacherPermissions(role);
+  return [
+    {
+      key: 'schools_classes_students',
+      label: 'Quản lý Lớp học & Học sinh liên trường',
+      description:
+        'Xem tất cả trường học, thêm/xóa lớp học, thêm hoặc nhập CSV học sinh và đặt lại mật khẩu học sinh.',
+      allowed: perms.canAccessAllSchools,
+    },
+    {
+      key: 'class_tasks',
+      label: 'Giao Bài tập Lớp & Mở khóa Giải lao',
+      description:
+        'Giao nhiệm vụ theo lớp, thiết lập số lượt tối thiểu, điểm sàn (0–1000) và phút giải lao thưởng.',
+      allowed: perms.canAssignClassTasks,
+    },
+    {
+      key: 'reports_csv',
+      label: 'Xem Thống kê & Xuất Báo cáo CSV',
+      description:
+        'Theo dõi lịch sử nộp bài, xếp hạng và xuất dữ liệu báo cáo chuẩn UTF-8 BOM cho Excel.',
+      allowed: true,
+    },
+    {
+      key: 'question_bank_edit',
+      label: 'Chỉnh sửa Ngân hàng Câu hỏi & Bộ đề',
+      description: perms.canEditQuestionBank
+        ? 'Toàn quyền thêm, sửa, xóa, sắp xếp 4 tầng (Mô-đun, Nhóm, Phần, Câu hỏi Hotspot) và Bộ đề.'
+        : 'Không được chỉnh sửa — Tài khoản LV1 chỉ có quyền xem Ngân hàng Câu hỏi và Bộ đề.',
+      allowed: perms.canEditQuestionBank,
+    },
+    {
+      key: 'realtime_battle',
+      label: 'Tổ chức & Điều phối Thi đấu Realtime',
+      description: perms.canHostBattle
+        ? 'Bật chế độ thi đấu theo lớp, cấu hình thẻ kỹ năng và điều khiển phòng thi đấu trực tiếp.'
+        : 'Không có quyền — Tài khoản LV1 không thể mở hoặc điều khiển phòng Thi đấu Realtime.',
+      allowed: perms.canHostBattle,
+    },
+    {
+      key: 'manage_schools',
+      label: 'Thêm / Xóa Trường học trong Hệ thống',
+      description: perms.canManageSchools
+        ? 'Tạo trường học mới hoặc xóa trường học và dữ liệu lớp/học sinh trực thuộc.'
+        : 'Chỉ dành cho Giáo viên Master.',
+      allowed: perms.canManageSchools,
+    },
+    {
+      key: 'manage_teachers_supabase',
+      label: 'Quản lý Giáo viên & Cấu hình Supabase',
+      description:
+        perms.canManageTeachers && perms.canManageSupabase
+          ? 'Cấp mới, chỉnh sửa vai trò, khóa/xóa tài khoản giáo viên và cấu hình đồng bộ CSDL Supabase.'
+          : 'Chỉ dành cho Giáo viên Master.',
+      allowed: perms.canManageTeachers && perms.canManageSupabase,
+    },
+  ];
+}
+
+export function normalizeTeacherStatus(status?: string | null): TeacherAccountStatus {
+  return status === 'locked' ? 'locked' : 'active';
+}
+
+export function getTeacherPermissions(role?: string | null): TeacherPermissions {
+  return ADMIN_ROLE_PERMISSIONS[normalizeAdminRole(role)];
+}
+
+export function canDeleteOrDemoteMaster(
+  teachers: Array<{ userId: string; role: string; status?: string | null }>,
+  targetUserId: string,
+  nextRole?: AdminRole,
+  nextStatus?: TeacherAccountStatus
+): { ok: boolean; error?: string } {
+  const target = teachers.find((t) => t.userId === targetUserId);
+  if (!target) {
+    return { ok: false, error: 'Không tìm thấy tài khoản giáo viên.' };
+  }
+  const targetRole = normalizeAdminRole(target.role);
+  const targetActive = normalizeTeacherStatus(target.status) === 'active';
+  const effectiveNextRole = nextRole ?? targetRole;
+  const effectiveNextActive =
+    nextRole === undefined && nextStatus === undefined
+      ? false
+      : (nextStatus ?? normalizeTeacherStatus(target.status)) === 'active';
+
+  const willLoseActiveMaster =
+    targetRole === 'master' &&
+    targetActive &&
+    (effectiveNextRole !== 'master' || !effectiveNextActive);
+
+  if (willLoseActiveMaster) {
+    const activeMasterCount = teachers.filter(
+      (t) =>
+        normalizeAdminRole(t.role) === 'master' &&
+        normalizeTeacherStatus(t.status) === 'active'
+    ).length;
+    if (activeMasterCount <= 1) {
+      return {
+        ok: false,
+        error:
+          'Phải giữ lại ít nhất 1 tài khoản Giáo viên Master đang hoạt động trong hệ thống.',
+      };
+    }
+  }
+  return { ok: true };
+}
+
+export function filterTeachers<
+  T extends { fullName: string; email: string; role: string; status?: string | null }
+>(
+  teachers: T[],
+  searchQuery: string,
+  roleFilter: 'all' | AdminRole,
+  statusFilter: 'all' | TeacherAccountStatus = 'all'
+): T[] {
+  const q = searchQuery.trim().toLowerCase();
+  return teachers.filter((t) => {
+    const normalizedRole = normalizeAdminRole(t.role);
+    const normalizedStatus = normalizeTeacherStatus(t.status);
+    if (roleFilter !== 'all' && normalizedRole !== roleFilter) {
+      return false;
+    }
+    if (statusFilter !== 'all' && normalizedStatus !== statusFilter) {
+      return false;
+    }
+    if (!q) return true;
+    return (
+      t.fullName.toLowerCase().includes(q) ||
+      t.email.toLowerCase().includes(q)
+    );
+  });
+}
+
+export function summarizeTeachersByRole(
+  teachers: Array<{ role: string }>
+): Record<AdminRole, number> & { total: number } {
+  const counts: Record<AdminRole, number> & { total: number } = {
+    teacher_lv1: 0,
+    teacher_lv2: 0,
+    master: 0,
+    total: teachers.length,
+  };
+  for (const t of teachers) {
+    counts[normalizeAdminRole(t.role)] += 1;
+  }
+  return counts;
+}
+
+export function summarizeTeacherStatuses(
+  teachers: Array<{ status?: string | null }>
+): Record<TeacherAccountStatus, number> & { total: number } {
+  const counts: Record<TeacherAccountStatus, number> & { total: number } = {
+    active: 0,
+    locked: 0,
+    total: teachers.length,
+  };
+  for (const t of teachers) {
+    counts[normalizeTeacherStatus(t.status)] += 1;
+  }
+  return counts;
+}

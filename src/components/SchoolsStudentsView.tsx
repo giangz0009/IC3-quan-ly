@@ -1,13 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import {
   KeyRound,
-  Plus,
+  Pencil,
   Search,
+  ShieldCheck,
   Trash2,
   Upload,
   UserPlus,
   Building2,
   GraduationCap,
+  X,
 } from 'lucide-react';
 import type {
   AdminDatabase,
@@ -16,13 +18,18 @@ import type {
   StudentProfile,
 } from '../types/ic3';
 import { api, type SafeTeacher } from '../utils/api';
-import { normalizeVietnamesePassword, parseStudentsCsv } from '../utils/ic3Rules';
+import {
+  getTeacherPermissions,
+  normalizeVietnamesePassword,
+  parseStudentsCsv,
+} from '../utils/ic3Rules';
 
 interface SchoolsStudentsViewProps {
   db: Omit<AdminDatabase, 'teachers'> & { teachers: SafeTeacher[] };
   currentTeacher: SafeTeacher;
   onRefresh: () => Promise<void>;
   onNotify: (msg: string, isError?: boolean) => void;
+  onOpenTeachersTab?: () => void;
 }
 
 export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
@@ -30,14 +37,11 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
   currentTeacher,
   onRefresh,
   onNotify,
+  onOpenTeachersTab,
 }) => {
-  const scopedSchools = useMemo(
-    () =>
-      currentTeacher.role === 'super_admin' || !currentTeacher.schoolId
-        ? db.schools
-        : db.schools.filter((s) => s.id === currentTeacher.schoolId),
-    [db.schools, currentTeacher]
-  );
+  const permissions = getTeacherPermissions(currentTeacher.role);
+  // Mọi giáo viên có tài khoản đều quản lý chung các trường trong dữ liệu hệ thống
+  const scopedSchools = db.schools;
 
   const [selectedSchoolId, setSelectedSchoolId] = useState<string>(
     scopedSchools[0]?.id ?? ''
@@ -74,14 +78,17 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
     );
   }, [classStudents, searchQuery]);
 
-  // Modals state
+  // Modals state (Add / Edit)
   const [showSchoolModal, setShowSchoolModal] = useState(false);
+  const [editingSchool, setEditingSchool] = useState<School | null>(null);
   const [schoolForm, setSchoolForm] = useState({ name: '', district: '' });
 
   const [showClassModal, setShowClassModal] = useState(false);
+  const [editingClass, setEditingClass] = useState<SchoolClass | null>(null);
   const [classForm, setClassForm] = useState({ name: '', grade: 'Khối 6' });
 
   const [showStudentModal, setShowStudentModal] = useState(false);
+  const [editingStudent, setEditingStudent] = useState<StudentProfile | null>(null);
   const [studentForm, setStudentForm] = useState({
     fullName: '',
     studentCode: '',
@@ -93,15 +100,6 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
     'Họ tên,Mã HS\nNguyễn Hoàng Nam,6A1-06\nTrần Ngọc Hân,6A1-07'
   );
 
-  const [showTeachersPanel, setShowTeachersPanel] = useState(false);
-  const [teacherForm, setTeacherForm] = useState({
-    fullName: '',
-    email: '',
-    password: '',
-    role: 'teacher' as 'super_admin' | 'teacher',
-    schoolId: (effectiveSchoolId || null) as string | null,
-  });
-
   const [busy, setBusy] = useState(false);
 
   const activeSchool: School | undefined = scopedSchools.find(
@@ -111,18 +109,46 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
     (c) => c.id === effectiveClassId
   );
 
-  async function handleCreateSchool(e: React.FormEvent) {
+  function openCreateSchoolModal() {
+    setEditingSchool(null);
+    setSchoolForm({ name: '', district: '' });
+    setShowSchoolModal(true);
+  }
+
+  function openEditSchoolModal(school: School) {
+    setEditingSchool(school);
+    setSchoolForm({ name: school.name, district: school.district });
+    setShowSchoolModal(true);
+  }
+
+  async function handleSaveSchool(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     try {
-      const created = await api.createSchool(schoolForm);
-      await onRefresh();
-      setSelectedSchoolId(created.id);
-      setShowSchoolModal(false);
-      setSchoolForm({ name: '', district: '' });
-      onNotify(`Đã thêm trường ${created.name}.`);
+      if (editingSchool) {
+        const updated = await api.updateSchool(editingSchool.id, schoolForm);
+        await onRefresh();
+        setShowSchoolModal(false);
+        setEditingSchool(null);
+        setSchoolForm({ name: '', district: '' });
+        onNotify(`Đã cập nhật trường ${updated.name}.`);
+      } else {
+        const created = await api.createSchool(schoolForm);
+        await onRefresh();
+        setSelectedSchoolId(created.id);
+        setShowSchoolModal(false);
+        setSchoolForm({ name: '', district: '' });
+        onNotify(`Đã thêm trường ${created.name}.`);
+      }
     } catch (err) {
-      onNotify(err instanceof Error ? err.message : 'Lỗi tạo trường.', true);
+      onNotify(
+        err instanceof Error
+          ? err.message
+          : editingSchool
+            ? 'Lỗi cập nhật trường.'
+            : 'Lỗi tạo trường.',
+        true
+      );
     } finally {
       setBusy(false);
     }
@@ -141,22 +167,50 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
     }
   }
 
-  async function handleCreateClass(e: React.FormEvent) {
+  function openCreateClassModal() {
+    setEditingClass(null);
+    setClassForm({ name: '', grade: 'Khối 6' });
+    setShowClassModal(true);
+  }
+
+  function openEditClassModal(cls: SchoolClass) {
+    setEditingClass(cls);
+    setClassForm({ name: cls.name, grade: cls.grade });
+    setShowClassModal(true);
+  }
+
+  async function handleSaveClass(e: React.FormEvent) {
     e.preventDefault();
-    if (!effectiveSchoolId) return;
+    if (!effectiveSchoolId && !editingClass) return;
     setBusy(true);
     try {
-      const created = await api.createClass({
-        schoolId: effectiveSchoolId,
-        ...classForm,
-      });
-      await onRefresh();
-      setSelectedClassId(created.id);
-      setShowClassModal(false);
-      setClassForm({ name: '', grade: 'Khối 6' });
-      onNotify(`Đã thêm lớp ${created.name}.`);
+      if (editingClass) {
+        const updated = await api.updateClass(editingClass.id, classForm);
+        await onRefresh();
+        setShowClassModal(false);
+        setEditingClass(null);
+        setClassForm({ name: '', grade: 'Khối 6' });
+        onNotify(`Đã cập nhật lớp ${updated.name}.`);
+      } else {
+        const created = await api.createClass({
+          schoolId: effectiveSchoolId,
+          ...classForm,
+        });
+        await onRefresh();
+        setSelectedClassId(created.id);
+        setShowClassModal(false);
+        setClassForm({ name: '', grade: 'Khối 6' });
+        onNotify(`Đã thêm lớp ${created.name}.`);
+      }
     } catch (err) {
-      onNotify(err instanceof Error ? err.message : 'Lỗi tạo lớp.', true);
+      onNotify(
+        err instanceof Error
+          ? err.message
+          : editingClass
+            ? 'Lỗi cập nhật lớp.'
+            : 'Lỗi tạo lớp.',
+        true
+      );
     } finally {
       setBusy(false);
     }
@@ -175,23 +229,55 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
     }
   }
 
-  async function handleCreateStudent(e: React.FormEvent) {
+  function openCreateStudentModal() {
+    setEditingStudent(null);
+    setStudentForm({ fullName: '', studentCode: '', alwaysBreakReady: false });
+    setShowStudentModal(true);
+  }
+
+  function openEditStudentModal(student: StudentProfile) {
+    setEditingStudent(student);
+    setStudentForm({
+      fullName: student.fullName,
+      studentCode: student.studentCode,
+      alwaysBreakReady: Boolean(student.alwaysBreakReady),
+    });
+    setShowStudentModal(true);
+  }
+
+  async function handleSaveStudent(e: React.FormEvent) {
     e.preventDefault();
-    if (!effectiveClassId) return;
+    if (!effectiveClassId && !editingStudent) return;
     setBusy(true);
     try {
-      const created = await api.createStudent({
-        classId: effectiveClassId,
-        ...studentForm,
-      });
-      await onRefresh();
-      setShowStudentModal(false);
-      setStudentForm({ fullName: '', studentCode: '', alwaysBreakReady: false });
-      onNotify(
-        `Đã thêm học sinh ${created.fullName} (mật khẩu mặc định: ${created.passwordHash}).`
-      );
+      if (editingStudent) {
+        const updated = await api.updateStudent(editingStudent.id, studentForm);
+        await onRefresh();
+        setShowStudentModal(false);
+        setEditingStudent(null);
+        setStudentForm({ fullName: '', studentCode: '', alwaysBreakReady: false });
+        onNotify(`Đã cập nhật thông tin học sinh ${updated.fullName}.`);
+      } else {
+        const created = await api.createStudent({
+          classId: effectiveClassId,
+          ...studentForm,
+        });
+        await onRefresh();
+        setShowStudentModal(false);
+        setStudentForm({ fullName: '', studentCode: '', alwaysBreakReady: false });
+        onNotify(
+          `Đã thêm học sinh ${created.fullName} (mật khẩu mặc định: ${created.passwordHash}).`
+        );
+      }
     } catch (err) {
-      onNotify(err instanceof Error ? err.message : 'Lỗi thêm học sinh.', true);
+      onNotify(
+        err instanceof Error
+          ? err.message
+          : editingStudent
+            ? 'Lỗi cập nhật học sinh.'
+            : 'Lỗi thêm học sinh.',
+        true
+      );
     } finally {
       setBusy(false);
     }
@@ -291,36 +377,15 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
     }
   }
 
-  async function handleCreateTeacher(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      await api.createTeacher(teacherForm);
-      await onRefresh();
-      setTeacherForm({
-        fullName: '',
-        email: '',
-        password: '',
-        role: 'teacher',
-        schoolId: effectiveSchoolId,
-      });
-      onNotify('Đã cấp tài khoản giáo viên mới.');
-    } catch (err) {
-      onNotify(err instanceof Error ? err.message : 'Lỗi tạo giáo viên.', true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <div className="space-y-6">
-      {/* Top Toolbar: Hierarchy Selection & Super Admin Teacher Toggle */}
+      {/* Top Toolbar: Hierarchy Selection & Link to Teacher Management */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
-          {currentTeacher.role === 'super_admin' && (
+          {permissions.canManageSchools && (
             <button
               type="button"
-              onClick={() => setShowSchoolModal(true)}
+              onClick={openCreateSchoolModal}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Building2 className="w-3.5 h-3.5" />
@@ -330,23 +395,20 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
           <button
             type="button"
             disabled={!effectiveSchoolId}
-            onClick={() => setShowClassModal(true)}
+            onClick={openCreateClassModal}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <GraduationCap className="w-3.5 h-3.5" />
             <span>Thêm Lớp học</span>
           </button>
-          {currentTeacher.role === 'super_admin' && (
+          {permissions.canManageTeachers && onOpenTeachersTab && (
             <button
               type="button"
-              onClick={() => setShowTeachersPanel((v) => !v)}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                showTeachersPanel
-                  ? 'border-blue-600 bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
-                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800'
-              }`}
+              onClick={onOpenTeachersTab}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              <span>Phân quyền Giáo viên ({db.teachers.length})</span>
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Quản lý Giáo viên ({db.teachers.length})</span>
             </button>
           )}
         </div>
@@ -364,7 +426,7 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
           <button
             type="button"
             disabled={!effectiveClassId}
-            onClick={() => setShowStudentModal(true)}
+            onClick={openCreateStudentModal}
             className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <UserPlus className="w-3.5 h-3.5" />
@@ -373,131 +435,6 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
         </div>
       </div>
 
-      {/* Super Admin Teacher RBAC Panel */}
-      {showTeachersPanel && currentTeacher.role === 'super_admin' && (
-        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="font-display text-base font-semibold text-slate-900 dark:text-white">
-                Quản lý Tài khoản Giáo viên & Phân quyền
-              </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Super Admin quản lý toàn hệ thống; Teacher chỉ quản lý trường được gán.
-              </p>
-            </div>
-          </div>
-
-          <form
-            onSubmit={handleCreateTeacher}
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-2"
-          >
-            <input
-              type="text"
-              required
-              placeholder="Họ và tên giáo viên"
-              value={teacherForm.fullName}
-              onChange={(e) =>
-                setTeacherForm({ ...teacherForm, fullName: e.target.value })
-              }
-              className="px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-            />
-            <input
-              type="email"
-              required
-              placeholder="Email đăng nhập"
-              value={teacherForm.email}
-              onChange={(e) =>
-                setTeacherForm({ ...teacherForm, email: e.target.value })
-              }
-              className="px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-            />
-            <input
-              type="password"
-              required
-              placeholder="Mật khẩu"
-              value={teacherForm.password}
-              onChange={(e) =>
-                setTeacherForm({ ...teacherForm, password: e.target.value })
-              }
-              className="px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-            />
-            <select
-              aria-label="Phạm vi quyền"
-              value={teacherForm.role === 'super_admin' ? 'super_admin' : teacherForm.schoolId || ''}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (val === 'super_admin') {
-                  setTeacherForm({ ...teacherForm, role: 'super_admin', schoolId: null });
-                } else {
-                  setTeacherForm({ ...teacherForm, role: 'teacher', schoolId: val });
-                }
-              }}
-              className="px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-            >
-              <option value="super_admin">Super Admin (Toàn bộ)</option>
-              {db.schools.map((s) => (
-                <option key={s.id} value={s.id}>
-                  Giáo viên · {s.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="submit"
-              disabled={busy}
-              className="px-4 py-2 text-xs font-semibold rounded-lg bg-slate-900 dark:bg-blue-600 text-white hover:opacity-90 cursor-pointer"
-            >
-              Cấp tài khoản
-            </button>
-          </form>
-
-          <div className="overflow-x-auto border-t border-slate-200 dark:border-slate-800 pt-3">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="text-xs text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
-                  <th className="py-2 pr-4 font-medium">Giáo viên</th>
-                  <th className="py-2 pr-4 font-medium">Email</th>
-                  <th className="py-2 pr-4 font-medium">Vai trò</th>
-                  <th className="py-2 text-right font-medium">Thao tác</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {db.teachers.map((t) => {
-                  const sc = db.schools.find((s) => s.id === t.schoolId);
-                  return (
-                    <tr key={t.userId} className="h-10">
-                      <td className="py-2 pr-4 font-medium">{t.fullName}</td>
-                      <td className="py-2 pr-4 font-mono text-xs text-slate-600 dark:text-slate-400">
-                        {t.email}
-                      </td>
-                      <td className="py-2 pr-4 text-xs">
-                        {t.role === 'super_admin'
-                          ? 'Super Admin'
-                          : `Giáo viên · ${sc?.name ?? 'Chưa gán'}`}
-                      </td>
-                      <td className="py-2 text-right">
-                        {t.userId !== currentTeacher.userId && (
-                          <button
-                            type="button"
-                            aria-label={`Xóa giáo viên ${t.fullName}`}
-                            onClick={async () => {
-                              await api.deleteTeacher(t.userId);
-                              await onRefresh();
-                              onNotify(`Đã xóa tài khoản ${t.fullName}.`);
-                            }}
-                            className="text-xs text-red-600 hover:underline cursor-pointer"
-                          >
-                            Xóa
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
 
       {/* 12-Col Master-Detail Workspace: Schools/Classes (4) + Students Table (8) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -534,15 +471,25 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
                         {school.district} · {countClasses} lớp
                       </div>
                     </button>
-                    {currentTeacher.role === 'super_admin' && (
-                      <button
-                        type="button"
-                        aria-label={`Xóa trường ${school.name}`}
-                        onClick={() => handleDeleteSchool(school)}
-                        className="p-1.5 text-slate-400 hover:text-red-600 rounded transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                    {permissions.canManageSchools && (
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <button
+                          type="button"
+                          aria-label={`Sửa trường ${school.name}`}
+                          onClick={() => openEditSchoolModal(school)}
+                          className="p-1.5 text-slate-400 hover:text-blue-600 rounded transition-colors cursor-pointer"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Xóa trường ${school.name}`}
+                          onClick={() => handleDeleteSchool(school)}
+                          className="p-1.5 text-slate-400 hover:text-red-600 rounded transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
@@ -584,14 +531,24 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
                         {cls.grade} · {countStudents} học sinh
                       </div>
                     </button>
-                    <button
-                      type="button"
-                      aria-label={`Xóa lớp ${cls.name}`}
-                      onClick={() => handleDeleteClass(cls)}
-                      className="p-1.5 text-slate-400 hover:text-red-600 rounded transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      <button
+                        type="button"
+                        aria-label={`Sửa lớp ${cls.name}`}
+                        onClick={() => openEditClassModal(cls)}
+                        className="p-1.5 text-slate-400 hover:text-blue-600 rounded transition-colors cursor-pointer"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Xóa lớp ${cls.name}`}
+                        onClick={() => handleDeleteClass(cls)}
+                        className="p-1.5 text-slate-400 hover:text-red-600 rounded transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -694,8 +651,17 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
                       <td className="py-2.5 text-right whitespace-nowrap space-x-3">
                         <button
                           type="button"
+                          aria-label={`Sửa học sinh ${st.fullName}`}
+                          onClick={() => openEditStudentModal(st)}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Sửa</span>
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => handleResetPassword(st)}
-                          className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                          className="text-xs font-medium text-slate-600 dark:text-slate-300 hover:underline cursor-pointer"
                         >
                           Reset MK
                         </button>
@@ -727,22 +693,45 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
         </section>
       </div>
 
-      {/* Modal: Thêm Trường học */}
+      {/* Modal: Thêm / Sửa Trường học */}
       {showSchoolModal && (
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="modal-school-title"
           className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4"
+          onClick={() => {
+            if (!busy) {
+              setShowSchoolModal(false);
+              setEditingSchool(null);
+            }
+          }}
         >
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-md p-6 space-y-4">
-            <h3
-              id="modal-school-title"
-              className="font-display text-lg font-semibold text-slate-900 dark:text-white"
-            >
-              Thêm Trường học mới
-            </h3>
-            <form onSubmit={handleCreateSchool} className="space-y-4">
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-md p-6 space-y-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h3
+                id="modal-school-title"
+                className="font-display text-lg font-semibold text-slate-900 dark:text-white"
+              >
+                {editingSchool ? 'Chỉnh sửa Trường học' : 'Thêm Trường học mới'}
+              </h3>
+              <button
+                type="button"
+                aria-label="Đóng hộp thoại trường học"
+                disabled={busy}
+                onClick={() => {
+                  setShowSchoolModal(false);
+                  setEditingSchool(null);
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveSchool} className="space-y-4">
               <div>
                 <label
                   htmlFor="school-name"
@@ -784,7 +773,11 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowSchoolModal(false)}
+                  disabled={busy}
+                  onClick={() => {
+                    setShowSchoolModal(false);
+                    setEditingSchool(null);
+                  }}
                   className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer"
                 >
                   Hủy
@@ -794,7 +787,7 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
                   disabled={busy}
                   className="px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 cursor-pointer"
                 >
-                  Lưu Trường học
+                  {editingSchool ? 'Lưu thay đổi' : 'Lưu Trường học'}
                 </button>
               </div>
             </form>
@@ -802,22 +795,47 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
         </div>
       )}
 
-      {/* Modal: Thêm Lớp học */}
+      {/* Modal: Thêm / Sửa Lớp học */}
       {showClassModal && (
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="modal-class-title"
           className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4"
+          onClick={() => {
+            if (!busy) {
+              setShowClassModal(false);
+              setEditingClass(null);
+            }
+          }}
         >
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-md p-6 space-y-4">
-            <h3
-              id="modal-class-title"
-              className="font-display text-lg font-semibold text-slate-900 dark:text-white"
-            >
-              Thêm Lớp học · {activeSchool?.name}
-            </h3>
-            <form onSubmit={handleCreateClass} className="space-y-4">
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-md p-6 space-y-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h3
+                id="modal-class-title"
+                className="font-display text-lg font-semibold text-slate-900 dark:text-white"
+              >
+                {editingClass
+                  ? `Chỉnh sửa Lớp ${editingClass.name}`
+                  : `Thêm Lớp học · ${activeSchool?.name}`}
+              </h3>
+              <button
+                type="button"
+                aria-label="Đóng hộp thoại lớp học"
+                disabled={busy}
+                onClick={() => {
+                  setShowClassModal(false);
+                  setEditingClass(null);
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveClass} className="space-y-4">
               <div>
                 <label htmlFor="class-name" className="block text-sm font-medium mb-1">
                   Tên lớp
@@ -855,7 +873,11 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowClassModal(false)}
+                  disabled={busy}
+                  onClick={() => {
+                    setShowClassModal(false);
+                    setEditingClass(null);
+                  }}
                   className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer"
                 >
                   Hủy
@@ -865,7 +887,7 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
                   disabled={busy}
                   className="px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 cursor-pointer"
                 >
-                  Tạo Lớp học
+                  {editingClass ? 'Lưu thay đổi' : 'Tạo Lớp học'}
                 </button>
               </div>
             </form>
@@ -873,22 +895,47 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
         </div>
       )}
 
-      {/* Modal: Thêm Học sinh */}
+      {/* Modal: Thêm / Sửa Học sinh */}
       {showStudentModal && (
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="modal-student-title"
           className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4"
+          onClick={() => {
+            if (!busy) {
+              setShowStudentModal(false);
+              setEditingStudent(null);
+            }
+          }}
         >
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-md p-6 space-y-4">
-            <h3
-              id="modal-student-title"
-              className="font-display text-lg font-semibold text-slate-900 dark:text-white"
-            >
-              Thêm Học sinh · Lớp {activeClass?.name}
-            </h3>
-            <form onSubmit={handleCreateStudent} className="space-y-4">
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-md p-6 space-y-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h3
+                id="modal-student-title"
+                className="font-display text-lg font-semibold text-slate-900 dark:text-white"
+              >
+                {editingStudent
+                  ? `Chỉnh sửa Học sinh · ${editingStudent.fullName}`
+                  : `Thêm Học sinh · Lớp ${activeClass?.name}`}
+              </h3>
+              <button
+                type="button"
+                aria-label="Đóng hộp thoại học sinh"
+                disabled={busy}
+                onClick={() => {
+                  setShowStudentModal(false);
+                  setEditingStudent(null);
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveStudent} className="space-y-4">
               <div>
                 <label htmlFor="st-fullname" className="block text-sm font-medium mb-1">
                   Họ và tên học sinh
@@ -922,16 +969,18 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
                 />
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs">
-                <span className="text-slate-500 dark:text-slate-400">
-                  Mật khẩu mặc định tự sinh:{' '}
-                </span>
-                <span className="font-mono font-semibold text-blue-600 dark:text-blue-400">
-                  {studentForm.fullName
-                    ? normalizeVietnamesePassword(studentForm.fullName)
-                    : '—'}
-                </span>
-              </div>
+              {!editingStudent && (
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs">
+                  <span className="text-slate-500 dark:text-slate-400">
+                    Mật khẩu mặc định tự sinh:{' '}
+                  </span>
+                  <span className="font-mono font-semibold text-blue-600 dark:text-blue-400">
+                    {studentForm.fullName
+                      ? normalizeVietnamesePassword(studentForm.fullName)
+                      : '—'}
+                  </span>
+                </div>
+              )}
 
               <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
                 <input
@@ -950,7 +999,11 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowStudentModal(false)}
+                  disabled={busy}
+                  onClick={() => {
+                    setShowStudentModal(false);
+                    setEditingStudent(null);
+                  }}
                   className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer"
                 >
                   Hủy
@@ -960,7 +1013,7 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
                   disabled={busy}
                   className="px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 cursor-pointer"
                 >
-                  Lưu Học sinh
+                  {editingStudent ? 'Lưu thay đổi' : 'Lưu Học sinh'}
                 </button>
               </div>
             </form>

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Pencil,
   Play,
   Plus,
   RotateCcw,
@@ -8,6 +9,7 @@ import {
   Square,
   Swords,
   Trophy,
+  X,
   Zap,
 } from 'lucide-react';
 import type { AdminDatabase, ClassBattleConfig } from '../types/ic3';
@@ -27,12 +29,7 @@ export const BattleControlView: React.FC<BattleControlViewProps> = ({
   onRefresh,
   onNotify,
 }) => {
-  const scopedClasses = useMemo(() => {
-    if (currentTeacher.role === 'super_admin' || !currentTeacher.schoolId) {
-      return db.classes;
-    }
-    return db.classes.filter((c) => c.schoolId === currentTeacher.schoolId);
-  }, [db.classes, currentTeacher]);
+  const scopedClasses = db.classes;
 
   const [selectedClassId, setSelectedClassId] = useState(
     scopedClasses[0]?.id ?? ''
@@ -68,11 +65,17 @@ export const BattleControlView: React.FC<BattleControlViewProps> = ({
   const [config, setConfig] = useState<ClassBattleConfig>(() =>
     buildConfig(effectiveClassId)
   );
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [configDraft, setConfigDraft] = useState<ClassBattleConfig>(() =>
+    buildConfig(effectiveClassId)
+  );
   const [busy, setBusy] = useState(false);
   const [joinStudentId, setJoinStudentId] = useState('');
 
   useEffect(() => {
-    setConfig(buildConfig(effectiveClassId));
+    const nextCfg = buildConfig(effectiveClassId);
+    setConfig(nextCfg);
+    setConfigDraft(nextCfg);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveClassId, db.battleConfigs]);
 
@@ -101,12 +104,28 @@ export const BattleControlView: React.FC<BattleControlViewProps> = ({
     setBusy(true);
     try {
       await api.saveBattleConfig(effectiveClassId, nextCfg);
+      setConfig(nextCfg);
       await onRefresh();
       onNotify(msg);
+      return true;
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Lỗi lưu cấu hình thi đấu.', true);
+      return false;
     } finally {
       setBusy(false);
+    }
+  }
+
+  function openEditConfigModal() {
+    setConfigDraft({ ...config });
+    setShowConfigModal(true);
+  }
+
+  async function handleSaveConfigModal(e: React.FormEvent) {
+    e.preventDefault();
+    const ok = await saveBattleConfig(configDraft, 'Đã lưu luật thi đấu cho lớp.');
+    if (ok) {
+      setShowConfigModal(false);
     }
   }
 
@@ -265,15 +284,9 @@ export const BattleControlView: React.FC<BattleControlViewProps> = ({
         </div>
       </div>
 
-      {/* Config Form */}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          saveBattleConfig(config, 'Đã lưu luật thi đấu cho lớp.');
-        }}
-        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-4"
-      >
-        <div className="flex items-center justify-between">
+      {/* Battle Config Summary Card */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="font-display text-base font-semibold text-slate-900 dark:text-white">
               Cấu hình Luật & Bộ đề Thi đấu
@@ -283,138 +296,47 @@ export const BattleControlView: React.FC<BattleControlViewProps> = ({
             </p>
           </div>
           <button
-            type="submit"
-            disabled={busy}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-slate-900 dark:bg-blue-600 text-white hover:opacity-90 cursor-pointer"
+            type="button"
+            disabled={busy || !effectiveClassId}
+            onClick={openEditConfigModal}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
           >
-            <Save className="w-3.5 h-3.5" />
-            <span>Lưu Cấu hình</span>
+            <Pencil className="w-3.5 h-3.5" />
+            <span>Chỉnh sửa Cấu hình</span>
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
           <div>
-            <label htmlFor="bt-title" className="block text-xs font-medium mb-1">
-              Tên giải đấu lớp
-            </label>
-            <input
-              id="bt-title"
-              type="text"
-              value={config.title}
-              onChange={(e) => setConfig({ ...config, title: e.target.value })}
-              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-            />
+            <div className="text-slate-500 dark:text-slate-400">Tên giải đấu lớp</div>
+            <div className="text-sm font-semibold text-slate-900 dark:text-white mt-0.5">
+              {config.title}
+            </div>
           </div>
           <div>
-            <label htmlFor="bt-set" className="block text-xs font-medium mb-1">
-              Bộ đề thi đấu
-            </label>
-            <select
-              id="bt-set"
-              value={config.questionSetId ?? ''}
-              onChange={(e) => {
-                const set = db.questionSets.find((s) => s.id === e.target.value);
-                setConfig({
-                  ...config,
-                  questionSetId: set?.id ?? null,
-                  questionSetName: set?.title ?? '',
-                  questionIds: set?.questionIds ?? [],
-                });
-              }}
-              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-            >
-              {db.questionSets.map((qs) => (
-                <option key={qs.id} value={qs.id}>
-                  {qs.title} ({qs.questionIds.length} câu)
-                </option>
-              ))}
-            </select>
+            <div className="text-slate-500 dark:text-slate-400">Bộ đề thi đấu</div>
+            <div className="text-sm font-medium text-slate-800 dark:text-slate-200 mt-0.5">
+              {config.questionSetName || 'Bộ đề tổng hợp'}{' '}
+              <span className="font-mono text-xs text-slate-500">
+                ({config.questionIds.length} câu)
+              </span>
+            </div>
           </div>
           <div>
-            <label htmlFor="bt-teacher" className="block text-xs font-medium mb-1">
-              Giáo viên tổ chức
-            </label>
-            <input
-              id="bt-teacher"
-              type="text"
-              value={config.teacherName}
-              onChange={(e) =>
-                setConfig({ ...config, teacherName: e.target.value })
-              }
-              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-            />
+            <div className="text-slate-500 dark:text-slate-400">Giáo viên tổ chức</div>
+            <div className="text-sm font-medium text-slate-800 dark:text-slate-200 mt-0.5">
+              {config.teacherName}
+            </div>
+          </div>
+          <div>
+            <div className="text-slate-500 dark:text-slate-400">Thông số trận & Thưởng</div>
+            <div className="text-sm font-mono tabular-nums text-slate-800 dark:text-slate-200 mt-0.5">
+              {config.timeLimitSeconds}s · Combo {config.fastComboWindowSeconds}s · Top{' '}
+              {config.topRewardCount} (+{config.breakRewardMinutes}p)
+            </div>
           </div>
         </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div>
-            <label htmlFor="bt-time" className="block text-xs font-medium mb-1">
-              Thời gian trận (giây)
-            </label>
-            <input
-              id="bt-time"
-              type="number"
-              min={30}
-              value={config.timeLimitSeconds}
-              onChange={(e) =>
-                setConfig({ ...config, timeLimitSeconds: Number(e.target.value) })
-              }
-              className="w-full px-3 py-2 text-sm font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-            />
-          </div>
-          <div>
-            <label htmlFor="bt-combo" className="block text-xs font-medium mb-1">
-              Ngưỡng Combo 2 câu (giây)
-            </label>
-            <input
-              id="bt-combo"
-              type="number"
-              min={5}
-              value={config.fastComboWindowSeconds}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  fastComboWindowSeconds: Number(e.target.value),
-                })
-              }
-              className="w-full px-3 py-2 text-sm font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-            />
-          </div>
-          <div>
-            <label htmlFor="bt-top" className="block text-xs font-medium mb-1">
-              Số hạng Top X nhận thưởng
-            </label>
-            <input
-              id="bt-top"
-              type="number"
-              min={1}
-              value={config.topRewardCount}
-              onChange={(e) =>
-                setConfig({ ...config, topRewardCount: Number(e.target.value) })
-              }
-              className="w-full px-3 py-2 text-sm font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-            />
-          </div>
-          <div>
-            <label htmlFor="bt-reward" className="block text-xs font-medium mb-1">
-              Thưởng giải lao Top X (phút)
-            </label>
-            <input
-              id="bt-reward"
-              type="number"
-              min={0}
-              value={config.breakRewardMinutes}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  breakRewardMinutes: Number(e.target.value),
-                })
-              }
-              className="w-full px-3 py-2 text-sm font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-            />
-          </div>
-        </div>
-      </form>
+      </section>
 
       {/* Live Room Monitor */}
       {activeRoom ? (
@@ -649,6 +571,195 @@ export const BattleControlView: React.FC<BattleControlViewProps> = ({
             <Plus className="w-3.5 h-3.5" />
             <span>Mở Phòng chờ ngay</span>
           </button>
+        </div>
+      )}
+
+      {/* Modal: Chỉnh sửa Cấu hình Luật & Bộ đề Thi đấu */}
+      {showConfigModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="battle-config-modal-title"
+          className="fixed inset-0 z-50 bg-slate-950/55 flex items-center justify-center p-4"
+          onClick={() => !busy && setShowConfigModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4">
+              <h3
+                id="battle-config-modal-title"
+                className="font-display text-base font-semibold text-slate-900 dark:text-white"
+              >
+                Chỉnh sửa Cấu hình Luật & Bộ đề Thi đấu
+              </h3>
+              <button
+                type="button"
+                aria-label="Đóng hộp thoại cấu hình thi đấu"
+                disabled={busy}
+                onClick={() => setShowConfigModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveConfigModal} className="overflow-y-auto p-6 space-y-4">
+              <div>
+                <label htmlFor="bt-title" className="block text-xs font-medium mb-1">
+                  Tên giải đấu lớp
+                </label>
+                <input
+                  id="bt-title"
+                  type="text"
+                  required
+                  value={configDraft.title}
+                  onChange={(e) =>
+                    setConfigDraft({ ...configDraft, title: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="bt-set" className="block text-xs font-medium mb-1">
+                    Bộ đề thi đấu
+                  </label>
+                  <select
+                    id="bt-set"
+                    value={configDraft.questionSetId ?? ''}
+                    onChange={(e) => {
+                      const set = db.questionSets.find((s) => s.id === e.target.value);
+                      setConfigDraft({
+                        ...configDraft,
+                        questionSetId: set?.id ?? null,
+                        questionSetName: set?.title ?? '',
+                        questionIds: set?.questionIds ?? [],
+                      });
+                    }}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                  >
+                    {db.questionSets.map((qs) => (
+                      <option key={qs.id} value={qs.id}>
+                        {qs.title} ({qs.questionIds.length} câu)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="bt-teacher" className="block text-xs font-medium mb-1">
+                    Giáo viên tổ chức
+                  </label>
+                  <input
+                    id="bt-teacher"
+                    type="text"
+                    required
+                    value={configDraft.teacherName}
+                    onChange={(e) =>
+                      setConfigDraft({ ...configDraft, teacherName: e.target.value })
+                    }
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div>
+                  <label htmlFor="bt-time" className="block text-xs font-medium mb-1">
+                    Thời gian trận (giây)
+                  </label>
+                  <input
+                    id="bt-time"
+                    type="number"
+                    min={30}
+                    value={configDraft.timeLimitSeconds}
+                    onChange={(e) =>
+                      setConfigDraft({
+                        ...configDraft,
+                        timeLimitSeconds: Number(e.target.value),
+                      })
+                    }
+                    className="w-full px-3 py-2 text-sm font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="bt-combo" className="block text-xs font-medium mb-1">
+                    Ngưỡng Combo (giây)
+                  </label>
+                  <input
+                    id="bt-combo"
+                    type="number"
+                    min={5}
+                    value={configDraft.fastComboWindowSeconds}
+                    onChange={(e) =>
+                      setConfigDraft({
+                        ...configDraft,
+                        fastComboWindowSeconds: Number(e.target.value),
+                      })
+                    }
+                    className="w-full px-3 py-2 text-sm font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="bt-top" className="block text-xs font-medium mb-1">
+                    Top X nhận thưởng
+                  </label>
+                  <input
+                    id="bt-top"
+                    type="number"
+                    min={1}
+                    value={configDraft.topRewardCount}
+                    onChange={(e) =>
+                      setConfigDraft({
+                        ...configDraft,
+                        topRewardCount: Number(e.target.value),
+                      })
+                    }
+                    className="w-full px-3 py-2 text-sm font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="bt-reward" className="block text-xs font-medium mb-1">
+                    Thưởng giải lao (phút)
+                  </label>
+                  <input
+                    id="bt-reward"
+                    type="number"
+                    min={0}
+                    value={configDraft.breakRewardMinutes}
+                    onChange={(e) =>
+                      setConfigDraft({
+                        ...configDraft,
+                        breakRewardMinutes: Number(e.target.value),
+                      })
+                    }
+                    className="w-full px-3 py-2 text-sm font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setShowConfigModal(false)}
+                  className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Lưu Cấu hình</span>
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

@@ -18,7 +18,8 @@ export type HotspotType =
 export type BattleDebuffType = 'blur' | 'frost' | 'reverse' | 'shake';
 export type BattleRoomStatus = 'lobby' | 'playing' | 'finished';
 export type BreakStatus = 'locked' | 'active' | 'expired';
-export type AdminRole = 'super_admin' | 'teacher';
+export type AdminRole = 'teacher_lv1' | 'teacher_lv2' | 'master';
+export type TeacherAccountStatus = 'active' | 'locked';
 
 export interface School {
   id: string;
@@ -52,7 +53,7 @@ export interface AdminTeacher {
   email: string;
   password: string;
   role: AdminRole;
-  schoolId: string | null;
+  status: TeacherAccountStatus;
   createdAt: string;
 }
 

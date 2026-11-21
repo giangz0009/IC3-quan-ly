@@ -34,7 +34,7 @@
 - **`School`**: `{ id, name, district, createdAt }`
 - **`SchoolClass`**: `{ id, schoolId, name, grade, createdAt }`
 - **`StudentProfile`**: `{ id, classId, fullName, studentCode, passwordHash, isCustomPassword, alwaysBreakReady, createdAt }`
-- **`AdminTeacher`**: `{ userId, fullName, email, password, role: 'super_admin' | 'teacher', schoolId: string | null, createdAt }` *(kiểu `SafeTeacher` ở frontend lược bỏ trường `password`)*.
+- **`AdminTeacher`**: `{ userId, fullName, email, password, role: 'teacher_lv1' | 'teacher_lv2' | 'master', status: 'active' | 'locked', createdAt }` *(giáo viên không gắn cố định với một trường mà quản lý liên trường; `password` được băm `scrypt$<salt>$<hash>` ở server; kiểu `SafeTeacher` ở frontend lược bỏ `password`)*.
 
 ### 2.2. Ngân hàng Câu hỏi 4 tầng & Bộ đề
 - **`IC3ModuleRecord`**: `{ id, code, level, title, description, orderIndex }` *(mặc định có `computing_fundamentals` [LV1], `key_applications` [LV2], `living_online` [LV3]; cho phép thêm tùy biến)*.
@@ -62,25 +62,27 @@
 
 ## 3. Danh mục REST API (`server.ts` ↔ `src/utils/api.ts`)
 
-| Nhóm | Method & Route | Chức năng |
-|---|---|---|
-| Hệ thống | `GET /api/health` | Kiểm tra trạng thái server |
-| Hệ thống | `GET /api/bootstrap` | Trả toàn bộ `AdminDatabase` (đã ẩn `password` của `teachers`) |
-| Xác thực & GV | `POST /api/auth/login` | Đăng nhập bằng `email` + `password` |
-| Xác thực & GV | `POST /api/teachers`, `DELETE /api/teachers/:userId` | Tạo / xóa tài khoản giáo viên (chặn xóa Super Admin cuối cùng) |
-| Trường học | `POST /api/schools`, `PUT /api/schools/:id`, `DELETE /api/schools/:id` | CRUD Trường học (xóa kéo theo lớp, học sinh, bài tập, nộp bài, break, battle của trường) |
-| Lớp học | `POST /api/classes`, `PUT /api/classes/:id`, `DELETE /api/classes/:id` | CRUD Lớp học (xóa kéo theo học sinh và cấu hình của lớp) |
-| Học sinh | `POST /api/students`, `POST /api/students/batch`, `PUT /api/students/:id`, `DELETE /api/students/:id` | CRUD Học sinh + nhập hàng loạt CSV (tự sinh MK không dấu) |
-| Mật khẩu HS | `POST /api/students/:id/reset-password`, `POST /api/classes/:id/reset-passwords` | Reset MK 1 học sinh hoặc cả lớp về mặc định không dấu |
-| Mô-đun IC3 | `POST /api/modules`, `PUT /api/modules/:id`, `DELETE /api/modules/:id` | CRUD Mô-đun (sửa `level` tự cập nhật cho `parts` & `questions`; chặn xóa khi còn dữ liệu con) |
-| Nhóm kiến thức | `POST /api/knowledge-categories`, `PUT /api/knowledge-categories/:id`, `DELETE /api/knowledge-categories/:id` | CRUD Nhóm kiến thức theo `module` (chặn xóa khi còn `parts` hoặc `questions`) |
-| Phần kiến thức | `POST /api/knowledge-parts`, `PUT /api/knowledge-parts/:id`, `DELETE /api/knowledge-parts/:id` | CRUD Phần kiến thức (chặn xóa khi còn `questions`) |
-| Câu hỏi | `POST /api/questions`, `PUT /api/questions/:id`, `DELETE /api/questions/:id` | CRUD Câu hỏi (tự đánh `topicOrder`, giữ/điều chỉnh `topicOrder`, xóa gỡ khỏi `questionSets`) |
-| Câu hỏi nâng cao | `POST /api/questions/reorder`, `POST /api/questions/batch-delete` | Cập nhật `topicOrder` hàng loạt & xóa nhiều câu hỏi cùng lúc |
-| Bộ đề | `POST /api/question-sets`, `PUT /api/question-sets/:id`, `DELETE /api/question-sets/:id` | CRUD Bộ đề luyện & thi đấu |
-| Đồng bộ Remote | `POST /api/question-bank/import-remote` | Ghi đè toàn bộ 5 mảng Ngân hàng Câu hỏi từ Supabase vào Local DB |
-| Bài tập & Nộp bài | `PUT /api/class-tasks/:classId`, `POST /api/submissions` | Lưu cấu hình nhiệm vụ lớp; ghi nhận lượt nộp & tự mở khóa giờ giải lao khi đủ 100% |
-| Thi đấu | `PUT /api/battle-configs/:classId`, `POST /api/battle-rooms`, `POST /api/battle-rooms/:roomId/join`, `start`, `simulate-step`, `finish`, `reset` | Lưu luật thi đấu lớp & điều phối toàn vòng đời phòng thi đấu |
+> Toàn bộ các route nghiệp vụ bên dưới yêu cầu header `Authorization: Bearer <token>` (trừ `GET /api/health` và `POST /api/auth/login`) và kiểm tra phân quyền trên server qua middleware `requireAuth` / `requireRoles`.
+
+| Nhóm | Method & Route | Quyền tối thiểu | Chức năng |
+|---|---|---|---|
+| Hệ thống | `GET /api/health` | Công khai | Kiểm tra trạng thái server |
+| Hệ thống | `GET /api/bootstrap` | `LV1 / LV2 / Master` | Trả `AdminDatabase` đã lọc theo quyền (`teachers` chỉ trả cho `master`, ẩn `password`) |
+| Xác thực | `POST /api/auth/login`, `POST /api/auth/logout` | Công khai / Đã đăng nhập | Đăng nhập bằng `email` + `password` (`scrypt`), cấp Bearer token ký HMAC-SHA256; đăng xuất thu hồi token |
+| Phân quyền GV | `POST /api/teachers`, `PUT /api/teachers/:userId`, `DELETE /api/teachers/:userId` | `Master` | Tạo / sửa (tên, email, mật khẩu tùy chọn, vai trò, trạng thái `active`/`locked`) / xóa tài khoản giáo viên (chặn tự hạ quyền/tự khóa & chặn hạ/khóa/xóa Master hoạt động cuối cùng) |
+| Trường học | `POST /api/schools`, `PUT /api/schools/:id`, `DELETE /api/schools/:id` | `Master` | CRUD Trường học (xóa kéo theo lớp, học sinh, bài tập, nộp bài, break, battle của trường) |
+| Lớp học | `POST /api/classes`, `PUT /api/classes/:id`, `DELETE /api/classes/:id` | `LV1 / LV2 / Master` | CRUD Lớp học liên trường (xóa kéo theo học sinh và cấu hình của lớp) |
+| Học sinh | `POST /api/students`, `POST /api/students/batch`, `PUT /api/students/:id`, `DELETE /api/students/:id` | `LV1 / LV2 / Master` | CRUD Học sinh + nhập hàng loạt CSV (tự sinh MK không dấu) |
+| Mật khẩu HS | `POST /api/students/:id/reset-password`, `POST /api/classes/:id/reset-passwords` | `LV1 / LV2 / Master` | Reset MK 1 học sinh hoặc cả lớp về mặc định không dấu |
+| Mô-đun IC3 | `POST /api/modules`, `PUT /api/modules/:id`, `DELETE /api/modules/:id` | `LV2 / Master` | CRUD Mô-đun (sửa `level` tự cập nhật cho `parts` & `questions`; chặn xóa khi còn dữ liệu con) |
+| Nhóm kiến thức | `POST /api/knowledge-categories`, `PUT /api/knowledge-categories/:id`, `DELETE /api/knowledge-categories/:id` | `LV2 / Master` | CRUD Nhóm kiến thức theo `module` (chặn xóa khi còn `parts` hoặc `questions`) |
+| Phần kiến thức | `POST /api/knowledge-parts`, `PUT /api/knowledge-parts/:id`, `DELETE /api/knowledge-parts/:id` | `LV2 / Master` | CRUD Phần kiến thức (chặn xóa khi còn `questions`) |
+| Câu hỏi | `POST /api/questions`, `PUT /api/questions/:id`, `DELETE /api/questions/:id` | `LV2 / Master` | CRUD Câu hỏi (tự đánh `topicOrder`, giữ/điều chỉnh `topicOrder`, xóa gỡ khỏi `questionSets`) |
+| Câu hỏi nâng cao | `POST /api/questions/reorder`, `POST /api/questions/batch-delete` | `LV2 / Master` | Cập nhật `topicOrder` hàng loạt & xóa nhiều câu hỏi cùng lúc |
+| Bộ đề | `POST /api/question-sets`, `PUT /api/question-sets/:id`, `DELETE /api/question-sets/:id` | `LV2 / Master` | CRUD Bộ đề luyện & thi đấu |
+| Đồng bộ Remote | `POST /api/question-bank/import-remote` | `LV2 / Master` | Ghi đè toàn bộ 5 mảng Ngân hàng Câu hỏi từ Supabase vào Local DB |
+| Bài tập & Nộp bài | `PUT /api/class-tasks/:classId`, `POST /api/submissions` | `LV1 / LV2 / Master` | Lưu cấu hình nhiệm vụ lớp; ghi nhận lượt nộp & tự mở khóa giờ giải lao khi đủ 100% |
+| Thi đấu | `PUT /api/battle-configs/:classId`, `POST /api/battle-rooms`, `POST /api/battle-rooms/:roomId/join`, `start`, `simulate-step`, `finish`, `reset` | `LV2 / Master` | Lưu luật thi đấu lớp & điều phối toàn vòng đời phòng thi đấu |
 
 ---
 
@@ -90,7 +92,7 @@ Kịch bản SQL tại `src/data/seedData.ts` định nghĩa **17 bảng** trong
 
 1. **Tổ chức & Tài khoản (4 bảng):**
    - `schools` → `classes` (`school_id` FK `ON DELETE CASCADE`) → `students` (`class_id` FK `ON DELETE CASCADE`, `UNIQUE(class_id, student_code)`)
-   - `admin_teachers` (`user_id` FK `auth.users(id)`, `school_id` FK `schools(id) ON DELETE SET NULL`)
+   - `admin_teachers` (`user_id` FK `auth.users(id)`, `role in ('teacher_lv1', 'teacher_lv2', 'master')`, `status in ('active', 'locked')`, không gắn `school_id` cố định)
 2. **Ngân hàng Câu hỏi & Bộ đề (5 bảng — Khóa ngoại 4 tầng):**
    - `ic3_modules` (`code UNIQUE`)
    - `knowledge_categories` (`UNIQUE(module, code)`, FK `module` → `ic3_modules(code)` `ON UPDATE CASCADE ON DELETE RESTRICT`)
@@ -107,4 +109,4 @@ Kịch bản SQL tại `src/data/seedData.ts` định nghĩa **17 bảng** trong
 5. **Lưu trữ ảnh Hotspot (Supabase Storage):**
    - Bucket công khai `hotspot-images` trên `storage.buckets` cùng 4 policy RLS trên `storage.objects` (`select`, `insert`, `update`, `delete` cho `anon, authenticated`). Đường dẫn ảnh (`imageUrl`) và tọa độ vùng/điểm đúng (`hotspotTarget`) được lưu trực tiếp trong cột `questions.payload` (`jsonb`).
 
-> **Lưu ý quan trọng khi nâng cấp DB cũ trên Supabase:** `SUPABASE_SCHEMA_SQL` có sẵn đoạn gỡ bỏ các ràng buộc `CHECK` cứng cũ trên `module/level/category`, tự động `DROP COLUMN IF EXISTS difficulty` trên bảng `questions`, khởi tạo bucket `hotspot-images` trên Storage, và tự động `INSERT ... ON CONFLICT DO NOTHING` để tạo dữ liệu cha còn thiếu từ `questions`/`knowledge_parts` trước khi gắn 3 ràng buộc khóa ngoại `fk_knowledge_categories_module`, `fk_knowledge_parts_category`, `fk_questions_part`.
+> **Lưu ý quan trọng khi nâng cấp DB cũ trên Supabase:** `SUPABASE_SCHEMA_SQL` có sẵn đoạn nâng cấp bảng `admin_teachers` (ánh xạ `super_admin` → `master`, `teacher` → `teacher_lv1`, cập nhật `CHECK` constraint sang 3 vai trò mới và `DROP COLUMN IF EXISTS school_id`), gỡ bỏ các ràng buộc `CHECK` cứng cũ trên `module/level/category`, tự động `DROP COLUMN IF EXISTS difficulty` trên bảng `questions`, khởi tạo bucket `hotspot-images` trên Storage, và tự động `INSERT ... ON CONFLICT DO NOTHING` để tạo dữ liệu cha còn thiếu từ `questions`/`knowledge_parts` trước khi gắn 3 ràng buộc khóa ngoại `fk_knowledge_categories_module`, `fk_knowledge_parts_category`, `fk_questions_part`.

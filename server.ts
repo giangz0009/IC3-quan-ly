@@ -6,14 +6,18 @@ import { createServer as createViteServer } from 'vite';
 import { createSeedDatabase } from './src/data/seedData';
 import {
   calculateIC3Score,
+  canDeleteOrDemoteMaster,
   getDefaultInstructionForQuestionType,
   getNextTopicOrder,
   isStudentBreakUnlocked,
+  normalizeAdminRole,
+  normalizeTeacherStatus,
   normalizeVietnamesePassword,
   rankBattleParticipants,
 } from './src/utils/ic3Rules';
 import type {
   AdminDatabase,
+  AdminRole,
   AdminTeacher,
   BattleDebuffType,
   BattleRoomState,
@@ -27,11 +31,86 @@ import type {
   School,
   SchoolClass,
   StudentProfile,
+  TeacherAccountStatus,
 } from './src/types/ic3';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'ic3_admin_db.json');
+
+const HASH_PREFIX = 'scrypt$';
+const SESSION_SECRET =
+  process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const revokedTokens = new Set<string>();
+
+function hashTeacherPassword(password: string): string {
+  if (password.startsWith(HASH_PREFIX)) return password;
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${HASH_PREFIX}${salt}$${derived}`;
+}
+
+function verifyTeacherPassword(password: string, stored: string): boolean {
+  if (!stored) return false;
+  if (!stored.startsWith(HASH_PREFIX)) {
+    const a = Buffer.from(password, 'utf8');
+    const b = Buffer.from(stored, 'utf8');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+  const parts = stored.split('$');
+  if (parts.length !== 3) return false;
+  const [, salt, hexHash] = parts;
+  const expected = Buffer.from(hexHash, 'hex');
+  const actual = crypto.scryptSync(password, salt, expected.length);
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+function signSessionToken(userId: string): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      userId,
+      jti: crypto.randomBytes(8).toString('hex'),
+      exp: Date.now() + SESSION_TTL_MS,
+    }),
+    'utf8'
+  ).toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(payload)
+    .digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifySessionToken(token: string): string | null {
+  if (!token || revokedTokens.has(token)) return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [payload, sig] = parts;
+  const expectedSig = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(payload)
+    .digest('base64url');
+  const sigBuf = Buffer.from(sig, 'utf8');
+  const expectedBuf = Buffer.from(expectedSig, 'utf8');
+  if (
+    sigBuf.length !== expectedBuf.length ||
+    !crypto.timingSafeEqual(sigBuf, expectedBuf)
+  ) {
+    return null;
+  }
+  try {
+    const decoded = JSON.parse(
+      Buffer.from(payload, 'base64url').toString('utf8')
+    ) as { userId?: string; exp?: number };
+    if (!decoded.userId || !decoded.exp || Date.now() > decoded.exp) {
+      return null;
+    }
+    return decoded.userId;
+  } catch {
+    return null;
+  }
+}
 
 function ensureDb(): AdminDatabase {
   if (!fs.existsSync(DATA_DIR)) {
@@ -39,6 +118,10 @@ function ensureDb(): AdminDatabase {
   }
   if (!fs.existsSync(DB_FILE)) {
     const seed = createSeedDatabase();
+    seed.teachers = seed.teachers.map((t) => ({
+      ...t,
+      password: hashTeacherPassword(t.password),
+    }));
     fs.writeFileSync(DB_FILE, JSON.stringify(seed, null, 2), 'utf-8');
     return seed;
   }
@@ -59,6 +142,56 @@ function ensureDb(): AdminDatabase {
       parsed.knowledgeParts = seed.knowledgeParts;
       changed = true;
     }
+    if (!Array.isArray(parsed.teachers) || parsed.teachers.length === 0) {
+      parsed.teachers = seed.teachers;
+      changed = true;
+    } else {
+      const migratedTeachers: AdminTeacher[] = [];
+      for (const rawT of parsed.teachers) {
+        const legacy = rawT as AdminTeacher & { schoolId?: unknown };
+        const nextRole = normalizeAdminRole(legacy.role);
+        const nextEmail =
+          legacy.userId === 'teacher_nd_01' &&
+          legacy.email === 'ha.tran@nguyendu.edu.vn'
+            ? 'giangday.lv1@ic3master.edu.vn'
+            : legacy.email;
+        const nextStatus = normalizeTeacherStatus(legacy.status);
+        const nextPassword = hashTeacherPassword(legacy.password || '');
+        if (
+          legacy.role !== nextRole ||
+          legacy.status !== nextStatus ||
+          'schoolId' in legacy ||
+          nextEmail !== legacy.email ||
+          nextPassword !== legacy.password
+        ) {
+          changed = true;
+        }
+        migratedTeachers.push({
+          userId: legacy.userId,
+          fullName: legacy.fullName,
+          email: nextEmail,
+          password: nextPassword,
+          role: nextRole,
+          status: nextStatus,
+          createdAt: legacy.createdAt,
+        });
+      }
+      if (
+        !migratedTeachers.some((t) => t.role === 'teacher_lv2') &&
+        migratedTeachers.some((t) => t.userId === 'teacher_admin_01') &&
+        migratedTeachers.some((t) => t.userId === 'teacher_nd_01')
+      ) {
+        const seedLv2 = seed.teachers.find((t) => t.role === 'teacher_lv2');
+        if (seedLv2 && !migratedTeachers.some((t) => t.email === seedLv2.email)) {
+          migratedTeachers.splice(1, 0, {
+            ...seedLv2,
+            password: hashTeacherPassword(seedLv2.password),
+          });
+          changed = true;
+        }
+      }
+      parsed.teachers = migratedTeachers;
+    }
     const seedQuestionMap = new Map(seed.questions.map((q) => [q.id, q]));
     for (const q of parsed.questions) {
       if (!q.contentCode || typeof q.topicOrder !== 'number') {
@@ -74,6 +207,10 @@ function ensureDb(): AdminDatabase {
     return parsed;
   } catch {
     const seed = createSeedDatabase();
+    seed.teachers = seed.teachers.map((t) => ({
+      ...t,
+      password: hashTeacherPassword(t.password),
+    }));
     fs.writeFileSync(DB_FILE, JSON.stringify(seed, null, 2), 'utf-8');
     return seed;
   }
@@ -88,11 +225,71 @@ function saveDb(): void {
 }
 
 function sanitizeTeachers(teachers: AdminTeacher[]) {
-  return teachers.map(({ password: _pw, ...rest }) => rest);
+  return teachers.map(({ password: _pw, ...rest }) => ({
+    ...rest,
+    role: normalizeAdminRole(rest.role),
+    status: normalizeTeacherStatus(rest.status),
+  }));
 }
 
 function makeId(prefix: string): string {
   return `${prefix}_${crypto.randomBytes(4).toString('hex')}`;
+}
+
+interface AuthedRequest extends express.Request {
+  authTeacher?: Omit<AdminTeacher, 'password'>;
+  authToken?: string;
+}
+
+function requireAuth(
+  req: AuthedRequest,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  const authHeader = req.headers.authorization;
+  const token =
+    typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : '';
+  const userId = verifySessionToken(token);
+  if (!userId) {
+    return res
+      .status(401)
+      .json({ error: 'Phiên đăng nhập hết hạn hoặc chưa xác thực. Vui lòng đăng nhập lại.' });
+  }
+  const found = db.teachers.find((t) => t.userId === userId);
+  if (!found) {
+    return res
+      .status(401)
+      .json({ error: 'Tài khoản giáo viên không còn tồn tại trong hệ thống.' });
+  }
+  if (normalizeTeacherStatus(found.status) === 'locked') {
+    return res
+      .status(401)
+      .json({ error: 'Tài khoản giáo viên đã bị tạm khóa.' });
+  }
+  const { password: _pw, ...safeTeacher } = found;
+  req.authTeacher = {
+    ...safeTeacher,
+    role: normalizeAdminRole(safeTeacher.role),
+    status: normalizeTeacherStatus(safeTeacher.status),
+  };
+  req.authToken = token;
+  return next();
+}
+
+function requireRoles(...allowedRoles: AdminRole[]) {
+  return (req: AuthedRequest, res: express.Response, next: express.NextFunction) => {
+    requireAuth(req, res, () => {
+      const role = req.authTeacher?.role;
+      if (!role || !allowedRoles.includes(role)) {
+        return res.status(403).json({
+          error: 'Tài khoản của bạn không đủ quyền thực hiện thao tác này.',
+        });
+      }
+      return next();
+    });
+  };
 }
 
 async function startServer() {
@@ -113,43 +310,69 @@ async function startServer() {
     const found = db.teachers.find(
       (t) =>
         t.email.toLowerCase() === email.trim().toLowerCase() &&
-        t.password === password
+        verifyTeacherPassword(password, t.password)
     );
     if (!found) {
       return res
         .status(401)
         .json({ error: 'Email hoặc mật khẩu giáo viên không chính xác.' });
     }
+    const teacherStatus = normalizeTeacherStatus(found.status);
+    if (teacherStatus === 'locked') {
+      return res.status(403).json({
+        error: 'Tài khoản này đang bị tạm khóa. Vui lòng liên hệ Giáo viên Master.',
+      });
+    }
+    const token = signSessionToken(found.userId);
     const { password: _pw, ...safeTeacher } = found;
-    return res.json({ teacher: safeTeacher });
-  });
-
-  app.get('/api/bootstrap', (_req, res) => {
-    res.json({
-      ...db,
-      teachers: sanitizeTeachers(db.teachers),
+    return res.json({
+      teacher: {
+        ...safeTeacher,
+        role: normalizeAdminRole(safeTeacher.role),
+        status: teacherStatus,
+      },
+      token,
     });
   });
 
-  app.post('/api/teachers', (req, res) => {
-    const { fullName, email, password, role, schoolId } = req.body ?? {};
+  app.post('/api/auth/logout', (req: AuthedRequest, res) => {
+    const authHeader = req.headers.authorization;
+    const token =
+      typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+        ? authHeader.slice(7).trim()
+        : '';
+    if (token) revokedTokens.add(token);
+    return res.json({ ok: true });
+  });
+
+  app.get('/api/bootstrap', requireAuth, (req: AuthedRequest, res) => {
+    const isMaster = req.authTeacher?.role === 'master';
+    res.json({
+      ...db,
+      teachers: isMaster ? sanitizeTeachers(db.teachers) : [],
+    });
+  });
+
+  app.post('/api/teachers', requireRoles('master'), (req, res) => {
+    const { fullName, email, password, role, status } = req.body ?? {};
     if (!fullName || !email || !password) {
       return res.status(400).json({ error: 'Thiếu họ tên, email hoặc mật khẩu.' });
     }
-    if (
-      db.teachers.some(
-        (t) => t.email.toLowerCase() === String(email).trim().toLowerCase()
-      )
-    ) {
+    const cleanEmail = String(email).trim().toLowerCase();
+    if (db.teachers.some((t) => t.email.toLowerCase() === cleanEmail)) {
       return res.status(409).json({ error: 'Email giáo viên đã tồn tại.' });
     }
+    const nextRole = normalizeAdminRole(typeof role === 'string' ? role : 'teacher_lv1');
+    const nextStatus: TeacherAccountStatus = normalizeTeacherStatus(
+      typeof status === 'string' ? status : 'active'
+    );
     const teacher: AdminTeacher = {
       userId: makeId('teacher'),
       fullName: String(fullName).trim(),
-      email: String(email).trim().toLowerCase(),
-      password: String(password),
-      role: role === 'super_admin' ? 'super_admin' : 'teacher',
-      schoolId: role === 'super_admin' ? null : schoolId || null,
+      email: cleanEmail,
+      password: hashTeacherPassword(String(password)),
+      role: nextRole,
+      status: nextStatus,
       createdAt: new Date().toISOString(),
     };
     db.teachers.push(teacher);
@@ -158,20 +381,87 @@ async function startServer() {
     return res.status(201).json(safe);
   });
 
-  app.delete('/api/teachers/:userId', (req, res) => {
+  app.put('/api/teachers/:userId', requireRoles('master'), (req: AuthedRequest, res) => {
     const { userId } = req.params;
+    const teacher = db.teachers.find((t) => t.userId === userId);
+    if (!teacher) {
+      return res.status(404).json({ error: 'Không tìm thấy giáo viên.' });
+    }
+    const { fullName, email, password, role, status } = req.body ?? {};
+    const nextRole =
+      typeof role === 'string' ? normalizeAdminRole(role) : teacher.role;
+    const nextStatus: TeacherAccountStatus =
+      typeof status === 'string'
+        ? normalizeTeacherStatus(status)
+        : normalizeTeacherStatus(teacher.status);
+
+    const masterCheck = canDeleteOrDemoteMaster(
+      db.teachers,
+      userId,
+      nextRole,
+      nextStatus
+    );
+    if (!masterCheck.ok) {
+      return res.status(400).json({ error: masterCheck.error });
+    }
+    if (
+      req.authTeacher?.userId === userId &&
+      nextRole !== 'master'
+    ) {
+      return res.status(400).json({
+        error: 'Không thể tự hạ quyền Master của tài khoản đang đăng nhập.',
+      });
+    }
+    if (
+      req.authTeacher?.userId === userId &&
+      nextStatus === 'locked'
+    ) {
+      return res.status(400).json({
+        error: 'Không thể tự tạm khóa tài khoản đang đăng nhập.',
+      });
+    }
+
+    if (typeof email === 'string' && email.trim()) {
+      const cleanEmail = email.trim().toLowerCase();
+      if (
+        cleanEmail !== teacher.email.toLowerCase() &&
+        db.teachers.some((t) => t.userId !== userId && t.email.toLowerCase() === cleanEmail)
+      ) {
+        return res.status(409).json({ error: 'Email giáo viên đã được tài khoản khác sử dụng.' });
+      }
+      teacher.email = cleanEmail;
+    }
+    if (typeof fullName === 'string' && fullName.trim()) {
+      teacher.fullName = fullName.trim();
+    }
+    if (typeof password === 'string' && password.trim()) {
+      teacher.password = hashTeacherPassword(password);
+    }
+    teacher.role = nextRole;
+    teacher.status = nextStatus;
+    saveDb();
+    const { password: _pw, ...safe } = teacher;
+    return res.json(safe);
+  });
+
+  app.delete('/api/teachers/:userId', requireRoles('master'), (req: AuthedRequest, res) => {
+    const { userId } = req.params;
+    if (req.authTeacher?.userId === userId) {
+      return res.status(400).json({ error: 'Không thể tự xóa tài khoản đang đăng nhập.' });
+    }
+    const masterCheck = canDeleteOrDemoteMaster(db.teachers, userId);
+    if (!masterCheck.ok) {
+      return res.status(400).json({ error: masterCheck.error });
+    }
     const idx = db.teachers.findIndex((t) => t.userId === userId);
     if (idx === -1) return res.status(404).json({ error: 'Không tìm thấy giáo viên.' });
-    if (db.teachers.length <= 1) {
-      return res.status(400).json({ error: 'Phải giữ lại ít nhất 1 tài khoản quản trị.' });
-    }
     db.teachers.splice(idx, 1);
     saveDb();
     return res.json({ ok: true });
   });
 
-  // --- Schools ---
-  app.post('/api/schools', (req, res) => {
+  // --- Schools (Master only) ---
+  app.post('/api/schools', requireRoles('master'), (req, res) => {
     const { name, district } = req.body ?? {};
     if (!name || !district) {
       return res.status(400).json({ error: 'Thiếu tên trường hoặc quận/huyện.' });
@@ -187,7 +477,7 @@ async function startServer() {
     return res.status(201).json(school);
   });
 
-  app.put('/api/schools/:id', (req, res) => {
+  app.put('/api/schools/:id', requireRoles('master'), (req, res) => {
     const school = db.schools.find((s) => s.id === req.params.id);
     if (!school) return res.status(404).json({ error: 'Không tìm thấy trường.' });
     const { name, district } = req.body ?? {};
@@ -197,7 +487,7 @@ async function startServer() {
     return res.json(school);
   });
 
-  app.delete('/api/schools/:id', (req, res) => {
+  app.delete('/api/schools/:id', requireRoles('master'), (req, res) => {
     const schoolId = req.params.id;
     const classIds = new Set(
       db.classes.filter((c) => c.schoolId === schoolId).map((c) => c.id)
@@ -217,8 +507,8 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
-  // --- Classes ---
-  app.post('/api/classes', (req, res) => {
+  // --- Classes (All teacher roles across any school) ---
+  app.post('/api/classes', requireAuth, (req, res) => {
     const { schoolId, name, grade } = req.body ?? {};
     if (!schoolId || !name || !grade) {
       return res.status(400).json({ error: 'Thiếu thông tin lớp học.' });
@@ -239,7 +529,7 @@ async function startServer() {
     return res.status(201).json(newClass);
   });
 
-  app.put('/api/classes/:id', (req, res) => {
+  app.put('/api/classes/:id', requireAuth, (req, res) => {
     const cls = db.classes.find((c) => c.id === req.params.id);
     if (!cls) return res.status(404).json({ error: 'Không tìm thấy lớp.' });
     const { name, grade } = req.body ?? {};
@@ -249,7 +539,7 @@ async function startServer() {
     return res.json(cls);
   });
 
-  app.delete('/api/classes/:id', (req, res) => {
+  app.delete('/api/classes/:id', requireAuth, (req, res) => {
     const classId = req.params.id;
     const studentIds = new Set(
       db.students.filter((st) => st.classId === classId).map((st) => st.id)
@@ -265,8 +555,8 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
-  // --- Students ---
-  app.post('/api/students', (req, res) => {
+  // --- Students (All teacher roles across any school) ---
+  app.post('/api/students', requireAuth, (req, res) => {
     const { classId, fullName, studentCode, alwaysBreakReady } = req.body ?? {};
     if (!classId || !fullName || !studentCode) {
       return res.status(400).json({ error: 'Thiếu lớp, họ tên hoặc mã học sinh.' });
@@ -297,7 +587,7 @@ async function startServer() {
     return res.status(201).json(student);
   });
 
-  app.post('/api/students/batch', (req, res) => {
+  app.post('/api/students/batch', requireAuth, (req, res) => {
     const { classId, rows } = req.body ?? {};
     if (!classId || !Array.isArray(rows) || rows.length === 0) {
       return res.status(400).json({ error: 'Danh sách nhập học sinh không hợp lệ.' });
@@ -339,7 +629,7 @@ async function startServer() {
     return res.status(201).json({ created, skipped });
   });
 
-  app.put('/api/students/:id', (req, res) => {
+  app.put('/api/students/:id', requireAuth, (req, res) => {
     const student = db.students.find((s) => s.id === req.params.id);
     if (!student) return res.status(404).json({ error: 'Không tìm thấy học sinh.' });
     const { fullName, studentCode, alwaysBreakReady } = req.body ?? {};
@@ -359,7 +649,7 @@ async function startServer() {
     return res.json(student);
   });
 
-  app.delete('/api/students/:id', (req, res) => {
+  app.delete('/api/students/:id', requireAuth, (req, res) => {
     const id = req.params.id;
     db.students = db.students.filter((s) => s.id !== id);
     db.submissions = db.submissions.filter((sub) => sub.studentId !== id);
@@ -368,7 +658,7 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
-  app.post('/api/students/:id/reset-password', (req, res) => {
+  app.post('/api/students/:id/reset-password', requireAuth, (req, res) => {
     const student = db.students.find((s) => s.id === req.params.id);
     if (!student) return res.status(404).json({ error: 'Không tìm thấy học sinh.' });
     student.passwordHash = normalizeVietnamesePassword(student.fullName);
@@ -377,7 +667,7 @@ async function startServer() {
     return res.json(student);
   });
 
-  app.post('/api/classes/:id/reset-passwords', (req, res) => {
+  app.post('/api/classes/:id/reset-passwords', requireAuth, (req, res) => {
     const classId = req.params.id;
     let count = 0;
     for (const student of db.students) {
@@ -391,8 +681,8 @@ async function startServer() {
     return res.json({ ok: true, count });
   });
 
-  // --- Modules (Levels) ---
-  app.post('/api/modules', (req, res) => {
+  // --- Modules (Levels — teacher_lv2 & master only) ---
+  app.post('/api/modules', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const body = req.body as Partial<IC3ModuleRecord>;
     const level = String(body.level ?? '').trim().toUpperCase();
     const title = String(body.title ?? '').trim();
@@ -428,7 +718,7 @@ async function startServer() {
     return res.status(201).json(created);
   });
 
-  app.put('/api/modules/:id', (req, res) => {
+  app.put('/api/modules/:id', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const mod = db.modules.find((m) => m.id === req.params.id);
     if (!mod) return res.status(404).json({ error: 'Không tìm thấy Mô-đun.' });
     const body = req.body as Partial<IC3ModuleRecord>;
@@ -463,7 +753,7 @@ async function startServer() {
     return res.json(mod);
   });
 
-  app.delete('/api/modules/:id', (req, res) => {
+  app.delete('/api/modules/:id', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const mod = db.modules.find((m) => m.id === req.params.id);
     if (!mod) return res.status(404).json({ error: 'Không tìm thấy Mô-đun.' });
     const hasCategories = db.knowledgeCategories.some((c) => c.module === mod.code);
@@ -480,8 +770,8 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
-  // --- Knowledge Categories ---
-  app.post('/api/knowledge-categories', (req, res) => {
+  // --- Knowledge Categories (teacher_lv2 & master only) ---
+  app.post('/api/knowledge-categories', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const body = req.body as Partial<KnowledgeCategoryRecord>;
     const modCode = String(body.module ?? '').trim();
     const cleanCode = String(body.code ?? '').trim().toUpperCase();
@@ -509,7 +799,7 @@ async function startServer() {
     return res.status(201).json(created);
   });
 
-  app.put('/api/knowledge-categories/:id', (req, res) => {
+  app.put('/api/knowledge-categories/:id', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const cat = db.knowledgeCategories.find((c) => c.id === req.params.id);
     if (!cat) return res.status(404).json({ error: 'Không tìm thấy nhóm kiến thức.' });
     const body = req.body as Partial<KnowledgeCategoryRecord>;
@@ -526,7 +816,7 @@ async function startServer() {
     return res.json(cat);
   });
 
-  app.delete('/api/knowledge-categories/:id', (req, res) => {
+  app.delete('/api/knowledge-categories/:id', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const cat = db.knowledgeCategories.find((c) => c.id === req.params.id);
     if (!cat) return res.status(404).json({ error: 'Không tìm thấy nhóm kiến thức.' });
     const catCode = cat.code.toUpperCase();
@@ -546,8 +836,8 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
-  // --- Knowledge Parts ---
-  app.post('/api/knowledge-parts', (req, res) => {
+  // --- Knowledge Parts (teacher_lv2 & master only) ---
+  app.post('/api/knowledge-parts', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const body = req.body as Partial<KnowledgePart>;
     if (!body.module || !body.level || !body.category || !body.code || !body.title) {
       return res.status(400).json({ error: 'Thiếu thông tin phần kiến thức.' });
@@ -580,7 +870,7 @@ async function startServer() {
     return res.status(201).json(created);
   });
 
-  app.put('/api/knowledge-parts/:id', (req, res) => {
+  app.put('/api/knowledge-parts/:id', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const part = db.knowledgeParts.find((p) => p.id === req.params.id);
     if (!part) return res.status(404).json({ error: 'Không tìm thấy phần kiến thức.' });
     const body = req.body as Partial<KnowledgePart>;
@@ -597,7 +887,7 @@ async function startServer() {
     return res.json(part);
   });
 
-  app.delete('/api/knowledge-parts/:id', (req, res) => {
+  app.delete('/api/knowledge-parts/:id', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const part = db.knowledgeParts.find((p) => p.id === req.params.id);
     if (!part) return res.status(404).json({ error: 'Không tìm thấy phần kiến thức.' });
     const hasQuestions = db.questions.some(
@@ -675,7 +965,7 @@ async function startServer() {
     }
   }
 
-  app.post('/api/questions', (req, res) => {
+  app.post('/api/questions', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const q = req.body as Partial<Question>;
     if (!q.prompt || !q.type || !q.module || !q.level || !q.category || !q.payload) {
       return res.status(400).json({ error: 'Thiếu dữ liệu câu hỏi bắt buộc.' });
@@ -717,7 +1007,7 @@ async function startServer() {
     return res.status(201).json(created);
   });
 
-  app.post('/api/questions/reorder', (req, res) => {
+  app.post('/api/questions/reorder', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const { updates } = req.body as {
       updates?: Array<{ id: string; topicOrder: number }>;
     };
@@ -736,7 +1026,7 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
-  app.put('/api/questions/:id', (req, res) => {
+  app.put('/api/questions/:id', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const idx = db.questions.findIndex((q) => q.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'Không tìm thấy câu hỏi.' });
     const existing = db.questions[idx];
@@ -786,7 +1076,7 @@ async function startServer() {
     return res.json(updated);
   });
 
-  app.delete('/api/questions/:id', (req, res) => {
+  app.delete('/api/questions/:id', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const qId = req.params.id;
     db.questions = db.questions.filter((q) => q.id !== qId);
     const now = new Date().toISOString();
@@ -805,7 +1095,7 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
-  app.post('/api/questions/batch-delete', (req, res) => {
+  app.post('/api/questions/batch-delete', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const { ids } = (req.body ?? {}) as { ids?: unknown };
     if (!Array.isArray(ids)) {
       return res.status(400).json({ error: 'Danh sách câu hỏi cần xóa không hợp lệ.' });
@@ -836,8 +1126,8 @@ async function startServer() {
     return res.json({ ok: true, deletedCount });
   });
 
-  // --- Question Sets ---
-  app.post('/api/question-sets', (req, res) => {
+  // --- Question Sets (teacher_lv2 & master only) ---
+  app.post('/api/question-sets', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const body = req.body as Partial<QuestionSet>;
     if (!body.title) {
       return res.status(400).json({ error: 'Thiếu tiêu đề bộ đề.' });
@@ -859,7 +1149,7 @@ async function startServer() {
     return res.status(201).json(created);
   });
 
-  app.put('/api/question-sets/:id', (req, res) => {
+  app.put('/api/question-sets/:id', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const idx = db.questionSets.findIndex((s) => s.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'Không tìm thấy bộ đề.' });
     const existing = db.questionSets[idx];
@@ -875,13 +1165,13 @@ async function startServer() {
     return res.json(updated);
   });
 
-  app.delete('/api/question-sets/:id', (req, res) => {
+  app.delete('/api/question-sets/:id', requireRoles('teacher_lv2', 'master'), (req, res) => {
     db.questionSets = db.questionSets.filter((s) => s.id !== req.params.id);
     saveDb();
     return res.json({ ok: true });
   });
 
-  app.post('/api/question-bank/import-remote', (req, res) => {
+  app.post('/api/question-bank/import-remote', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const {
       modules,
       knowledgeCategories,
@@ -924,8 +1214,8 @@ async function startServer() {
     });
   });
 
-  // --- Class Task Configs ---
-  app.put('/api/class-tasks/:classId', (req, res) => {
+  // --- Class Task Configs (All teacher roles) ---
+  app.put('/api/class-tasks/:classId', requireAuth, (req, res) => {
     const { classId } = req.params;
     const cls = db.classes.find((c) => c.id === classId);
     if (!cls) return res.status(404).json({ error: 'Không tìm thấy lớp học.' });
@@ -962,7 +1252,7 @@ async function startServer() {
   });
 
   // --- Submissions (including demo/test recording & break state update) ---
-  app.post('/api/submissions', (req, res) => {
+  app.post('/api/submissions', requireAuth, (req, res) => {
     const { studentId, taskId, correctCount, totalCount, durationSeconds } = req.body ?? {};
     const student = db.students.find((s) => s.id === studentId);
     if (!student) return res.status(404).json({ error: 'Không tìm thấy học sinh.' });
@@ -1029,8 +1319,8 @@ async function startServer() {
     return res.status(201).json(record);
   });
 
-  // --- Battle Configs & Control Room ---
-  app.put('/api/battle-configs/:classId', (req, res) => {
+  // --- Battle Configs & Control Room (teacher_lv2 & master only) ---
+  app.put('/api/battle-configs/:classId', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const { classId } = req.params;
     const cls = db.classes.find((c) => c.id === classId);
     if (!cls) return res.status(404).json({ error: 'Không tìm thấy lớp học.' });
@@ -1082,7 +1372,7 @@ async function startServer() {
     return res.json(config);
   });
 
-  app.post('/api/battle-rooms', (req, res) => {
+  app.post('/api/battle-rooms', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const { classId } = req.body ?? {};
     const cfg = db.battleConfigs.find((c) => c.classId === classId);
     if (!cfg) {
@@ -1140,7 +1430,7 @@ async function startServer() {
     return res.status(201).json(room);
   });
 
-  app.post('/api/battle-rooms/:roomId/join', (req, res) => {
+  app.post('/api/battle-rooms/:roomId/join', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const room = db.battleRooms.find((r) => r.id === req.params.roomId);
     if (!room) return res.status(404).json({ error: 'Không tìm thấy phòng.' });
     const { studentId } = req.body ?? {};
@@ -1184,7 +1474,7 @@ async function startServer() {
     return res.json(room);
   });
 
-  app.post('/api/battle-rooms/:roomId/start', (req, res) => {
+  app.post('/api/battle-rooms/:roomId/start', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const room = db.battleRooms.find((r) => r.id === req.params.roomId);
     if (!room) return res.status(404).json({ error: 'Không tìm thấy phòng.' });
     if (room.participants.length === 0) {
@@ -1208,7 +1498,7 @@ async function startServer() {
     return res.json(room);
   });
 
-  app.post('/api/battle-rooms/:roomId/simulate-step', (req, res) => {
+  app.post('/api/battle-rooms/:roomId/simulate-step', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const room = db.battleRooms.find((r) => r.id === req.params.roomId);
     if (!room) return res.status(404).json({ error: 'Không tìm thấy phòng.' });
     if (room.status !== 'playing') {
@@ -1342,7 +1632,7 @@ async function startServer() {
     return res.json(room);
   });
 
-  app.post('/api/battle-rooms/:roomId/finish', (req, res) => {
+  app.post('/api/battle-rooms/:roomId/finish', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const room = db.battleRooms.find((r) => r.id === req.params.roomId);
     if (!room) return res.status(404).json({ error: 'Không tìm thấy phòng.' });
     const now = new Date().toISOString();
@@ -1396,7 +1686,7 @@ async function startServer() {
     return res.json(room);
   });
 
-  app.post('/api/battle-rooms/:roomId/reset', (req, res) => {
+  app.post('/api/battle-rooms/:roomId/reset', requireRoles('teacher_lv2', 'master'), (req, res) => {
     const room = db.battleRooms.find((r) => r.id === req.params.roomId);
     if (!room) return res.status(404).json({ error: 'Không tìm thấy phòng.' });
     const now = new Date().toISOString();

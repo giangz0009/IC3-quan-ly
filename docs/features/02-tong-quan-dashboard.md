@@ -17,17 +17,17 @@
 
 ## 2. Mô tả Nghiệp vụ & Giao diện
 
-Tab **Tổng quan** là màn hình mặc định ngay sau khi đăng nhập, cung cấp bức tranh nhanh về tình hình học tập theo đúng phạm vi trường học của tài khoản đang đăng nhập (`scopedSchoolId`):
+Tab **Tổng quan** là màn hình mặc định ngay sau khi đăng nhập, cung cấp bức tranh nhanh về tình hình học tập của **toàn bộ các trường và lớp** trong hệ thống (`scopedSchoolId = null` đối với mọi cấp giáo viên LV1, LV2 và Master):
 
 ### 2.1. Dải 4 Thẻ Chỉ số (KPI Strip)
-1. **Học sinh đang quản lý:** Tổng số học sinh thuộc các lớp trong phạm vi (`visibleStudents.length`), kèm số lớp và số trường (`1 trường` nếu là `teacher`, hoặc tổng số trường nếu là `super_admin`).
+1. **Học sinh đang quản lý:** Tổng số học sinh thuộc các lớp trong hệ thống (`visibleStudents.length`), kèm tổng số lớp và tổng số trường.
 2. **Ngân hàng câu hỏi IC3:** Tổng số câu hỏi (`db.questions.length`) và số bộ đề (`db.questionSets.length`).
 3. **Điểm trung bình lượt nộp:** Trung bình cộng điểm thang 1000 của tất cả lượt nộp trong phạm vi (`visibleSubmissions`), kèm tỷ lệ đạt chuẩn `score >= 700` (số lượt đạt / tổng số lượt).
-4. **Phòng Thi đấu Realtime:** Số lớp trong phạm vi đang bật nút Thi đấu (`battleConfigs` có `isEnabled === true`).
+4. **Phòng Thi đấu Realtime:** Số lớp trong hệ thống đang bật nút Thi đấu (`battleConfigs` có `isEnabled === true`).
 
 ### 2.2. Khu vực Theo dõi Chi tiết (Split 7/5)
 - **Tiến độ Bài tập & Mở khóa Giải lao theo Lớp (7 cột):**
-  - Liệt kê từng lớp trong phạm vi kèm tên trường, sĩ số, số nhiệm vụ đã giao, số phút thưởng giải lao và trạng thái nút Thi đấu (`Đang bật` / `Tắt`).
+  - Liệt kê từng lớp kèm tên trường, sĩ số, số nhiệm vụ đã giao, số phút thưởng giải lao và trạng thái nút Thi đấu (`Đang bật` / `Tắt`).
   - Tính tỷ lệ `%` học sinh đã mở khóa giờ giải lao (`isStudentBreakUnlocked(taskCfg.tasks, db.submissions, st.id)`) và hiển thị thanh tiến độ trực quan.
   - Có nút chuyển nhanh sang tab **Giao Bài tập Lớp**.
 - **Lượt nộp bài gần nhất (5 cột):**
@@ -38,7 +38,7 @@ Tab **Tổng quan** là màn hình mặc định ngay sau khi đăng nhập, cun
 
 ## 3. Quy tắc & Ràng buộc Xử lý
 
-- Nếu tài khoản là `teacher`, chỉ các lớp thuộc `schoolId` của giáo viên đó mới được tính vào KPI, danh sách tiến độ lớp và lượt nộp gần nhất.
+- Cả 3 cấp giáo viên (LV1, LV2, Master) đều theo dõi được dữ liệu toàn hệ thống trên tất cả các trường (`scopedSchoolId = null`).
 - Thẻ KPI *Điểm trung bình* lấy mốc `>= 700` để tính tỷ lệ đạt chuẩn IC3 chung; trong khi danh sách *Lượt nộp bài gần nhất* dùng `sub.metMinScore` (so với `minScore` cấu hình riêng của từng nhiệm vụ).
 
 ---
@@ -51,4 +51,5 @@ Tab **Tổng quan** là màn hình mặc định ngay sau khi đăng nhập, cun
 
 ## 5. Nhật ký thay đổi
 
+- **2026-11-21:** Cập nhật mô hình tổng quan liên trường thống nhất cho cả 3 cấp giáo viên (LV1, LV2, Master).
 - **2026-11-20:** Rà soát và tách tài liệu mô tả riêng cho tab Tổng quan Dashboard.

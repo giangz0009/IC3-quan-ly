@@ -63,7 +63,8 @@
 
 - Khi nhấn `Xóa` trên Ngân hàng Câu hỏi và đẩy đồng bộ toàn bộ (`syncLocalDatabaseToSupabase`), thao tác `upsert` chỉ thêm/cập nhật chứ không tự xóa các dòng dư bên Supabase (muốn xóa bản ghi trên Supabase cần dùng thao tác xóa live từng câu/bộ đề/phần hoặc xóa hàng loạt).
 - Các phân hệ ngoài Ngân hàng Câu hỏi (`schools`, `classes`, `students`, `class_tasks`, `submissions`, `battle_rooms`) chưa có cơ chế kéo từ Supabase về Local DB và chưa đồng bộ live từng thao tác CRUD.
-- Nếu dự án triển khai cho nhiều giáo viên thực tế trên môi trường production, cần chuyển sang xác thực Supabase Auth + siết chặt RLS theo `auth.uid()` / `school_id` thay vì policy mở toàn quyền cho `anon`.
+- Nếu dự án triển khai cho nhiều giáo viên thực tế trên môi trường production, cần chuyển sang xác thực Supabase Auth + siết chặt RLS theo `auth.uid()` và bảng `admin_teachers.role` thay vì policy mở toàn quyền cho `anon`.
+- Tab **Kết nối Supabase** trên giao diện Admin chỉ hiển thị đối với tài khoản **Giáo viên Master** (`permissions.canManageSupabase`).
 
 ---
 
