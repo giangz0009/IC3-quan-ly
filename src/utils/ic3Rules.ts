@@ -1,10 +1,12 @@
 import {
   CATEGORY_LABELS,
   MODULE_LABELS,
+  QUESTION_DEFAULT_INSTRUCTIONS,
   type AdminTaskStatRecord,
   type BattleParticipant,
   type BattleRankedResult,
   type ClassTaskItem,
+  type HotspotTarget,
   type IC3Level,
   type IC3Module,
   type IC3ModuleRecord,
@@ -13,9 +15,17 @@ import {
   type KnowledgePart,
   type Question,
   type QuestionSet,
+  type QuestionType,
   type SchoolClass,
   type StudentProfile,
 } from '../types/ic3';
+
+/**
+ * Lấy câu hướng dẫn ngắn mặc định tương ứng với từng dạng câu hỏi IC3.
+ */
+export function getDefaultInstructionForQuestionType(type: QuestionType): string {
+  return QUESTION_DEFAULT_INSTRUCTIONS[type] ?? QUESTION_DEFAULT_INSTRUCTIONS.single;
+}
 
 /**
  * Chuẩn hóa mật khẩu mặc định học sinh từ họ tên tiếng Việt:
@@ -124,6 +134,52 @@ export function gradeQuestion(question: Question, answer: unknown): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * Tính tọa độ tâm (%) của vùng đáp án Hotspot.
+ */
+export function getHotspotTargetCenter(target: HotspotTarget): { x: number; y: number } {
+  return {
+    x: Number(((target.minX + target.maxX) / 2).toFixed(1)),
+    y: Number(((target.minY + target.maxY) / 2).toFixed(1)),
+  };
+}
+
+/**
+ * Tạo HotspotTarget từ thao tác nhấp 1 điểm (tạo vùng ±4% x ±6% quanh tâm)
+ * hoặc kéo chuột khoanh vùng trên ảnh.
+ */
+export function buildHotspotTargetFromPoints(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  label: string
+): HotspotTarget {
+  const clamp = (val: number) => Number(Math.min(100, Math.max(0, val)).toFixed(1));
+  const minX = clamp(Math.min(start.x, end.x));
+  const maxX = clamp(Math.max(start.x, end.x));
+  const minY = clamp(Math.min(start.y, end.y));
+  const maxY = clamp(Math.max(start.y, end.y));
+
+  if (maxX - minX < 2 || maxY - minY < 2) {
+    const cx = clamp((start.x + end.x) / 2);
+    const cy = clamp((start.y + end.y) / 2);
+    return {
+      label: label.trim() || 'Điểm đáp án đúng',
+      minX: clamp(cx - 4),
+      maxX: clamp(cx + 4),
+      minY: clamp(cy - 6),
+      maxY: clamp(cy + 6),
+    };
+  }
+
+  return {
+    label: label.trim() || 'Điểm đáp án đúng',
+    minX,
+    minY,
+    maxX,
+    maxY,
+  };
 }
 
 export interface TaskCompletionSummary {
@@ -460,7 +516,6 @@ export interface QuestionBankSupabasePayload {
     type: Question['type'];
     prompt: string;
     instruction: string | null;
-    difficulty: Question['difficulty'];
     payload: Question['payload'];
     explanation: string;
     tips: string | null;
@@ -633,8 +688,7 @@ export function buildQuestionBankSupabasePayload(input: {
       topic: (q.topic || 'Tổng hợp').trim(),
       type: q.type,
       prompt: q.prompt,
-      instruction: q.instruction ?? null,
-      difficulty: q.difficulty,
+      instruction: q.instruction ?? getDefaultInstructionForQuestionType(q.type),
       payload: q.payload,
       explanation: q.explanation ?? '',
       tips: q.tips ?? null,
@@ -732,3 +786,185 @@ export function formatSupabaseLoadingStatus(
   if (tasks.length === 1) return latest.label;
   return `${latest.label} (${tasks.length} tác vụ đang chờ Supabase...)`;
 }
+
+export interface ClipboardImageSource {
+  items?: ArrayLike<{
+    kind?: string;
+    type?: string;
+    getAsFile?: () => File | null;
+  }> | null;
+  files?: ArrayLike<File> | null;
+}
+
+/**
+ * Trích xuất tệp hình ảnh đầu tiên từ dữ liệu Clipboard (hỗ trợ Ctrl + V ảnh chụp màn hình hoặc tệp ảnh).
+ */
+export function extractImageFileFromClipboardData(
+  clipboardData: ClipboardImageSource | null | undefined
+): File | null {
+  if (!clipboardData) return null;
+
+  if (clipboardData.items) {
+    for (let i = 0; i < clipboardData.items.length; i += 1) {
+      const item = clipboardData.items[i];
+      if (!item) continue;
+      const isImage =
+        (!item.kind || item.kind === 'file') &&
+        typeof item.type === 'string' &&
+        item.type.toLowerCase().startsWith('image/');
+      if (isImage && typeof item.getAsFile === 'function') {
+        const file = item.getAsFile();
+        if (file) return file;
+      }
+    }
+  }
+
+  if (clipboardData.files) {
+    for (let i = 0; i < clipboardData.files.length; i += 1) {
+      const file = clipboardData.files[i];
+      if (
+        file &&
+        typeof file.type === 'string' &&
+        file.type.toLowerCase().startsWith('image/')
+      ) {
+        return file;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Chỉ cho phép tải tệp ảnh Hotspot lên Storage bucket khi giáo viên bấm "Lưu Câu hỏi"
+ * và toàn bộ dữ liệu câu hỏi (đề bài, ảnh, điểm đúng) đã hợp lệ.
+ */
+export function shouldUploadHotspotFileOnSave(input: {
+  questionType: QuestionType;
+  hasPendingFile: boolean;
+  supabaseConfigured: boolean;
+  promptValid: boolean;
+  hotspotImageReady: boolean;
+  hotspotTargetReady: boolean;
+}): boolean {
+  if (input.questionType !== 'hotspot') return false;
+  if (!input.hasPendingFile || !input.supabaseConfigured) return false;
+  return input.promptValid && input.hotspotImageReady && input.hotspotTargetReady;
+}
+
+/**
+ * Tách đường dẫn file trong Supabase Storage bucket từ URL công khai (hoặc signed URL).
+ * Trả về null nếu URL là Data URL, Blob URL, rỗng hoặc không thuộc bucket chỉ định.
+ */
+export function extractHotspotStoragePathFromUrl(
+  imageUrl: string | null | undefined,
+  bucketName = 'hotspot-images'
+): string | null {
+  if (!imageUrl || typeof imageUrl !== 'string') return null;
+  const trimmed = imageUrl.trim();
+  if (!trimmed || trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+    return null;
+  }
+
+  const escapedBucket = bucketName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(
+    `/storage/v1/object/(?:public/|authenticated/|sign/)?${escapedBucket}/([^?#]+)`
+  );
+  const match = trimmed.match(pattern);
+  if (!match || !match[1]) return null;
+
+  try {
+    return decodeURIComponent(match[1]).replace(/^\/+/, '') || null;
+  } catch {
+    return match[1].replace(/^\/+/, '') || null;
+  }
+}
+
+/**
+ * Xác định đường dẫn ảnh cũ trên Storage cần xóa khi giáo viên sửa câu hỏi (đổi sang ảnh khác hoặc đổi dạng câu hỏi).
+ */
+export function getObsoleteHotspotStoragePath(
+  oldImageUrl: string | null | undefined,
+  newImageUrl: string | null | undefined,
+  remainingQuestions: Question[] = [],
+  bucketName = 'hotspot-images'
+): string | null {
+  const oldPath = extractHotspotStoragePathFromUrl(oldImageUrl, bucketName);
+  if (!oldPath) return null;
+
+  const newPath = extractHotspotStoragePathFromUrl(newImageUrl, bucketName);
+  if (newPath && newPath === oldPath) return null;
+
+  const stillReferenced = remainingQuestions.some((q) => {
+    const url = 'imageUrl' in q.payload ? q.payload.imageUrl : undefined;
+    return extractHotspotStoragePathFromUrl(url, bucketName) === oldPath;
+  });
+  return stillReferenced ? null : oldPath;
+}
+
+/**
+ * Thu thập danh sách đường dẫn ảnh trên Storage cần xóa khi xóa 1 hoặc nhiều câu hỏi Hotspot.
+ */
+export function collectHotspotStoragePathsToDelete(
+  deletedQuestions: Question[],
+  remainingQuestions: Question[] = [],
+  bucketName = 'hotspot-images'
+): string[] {
+  const remainingPaths = new Set<string>();
+  for (const q of remainingQuestions) {
+    const url = 'imageUrl' in q.payload ? q.payload.imageUrl : undefined;
+    const path = extractHotspotStoragePathFromUrl(url, bucketName);
+    if (path) remainingPaths.add(path);
+  }
+
+  const toDelete = new Set<string>();
+  for (const q of deletedQuestions) {
+    const url = 'imageUrl' in q.payload ? q.payload.imageUrl : undefined;
+    const path = extractHotspotStoragePathFromUrl(url, bucketName);
+    if (path && !remainingPaths.has(path)) {
+      toDelete.add(path);
+    }
+  }
+  return Array.from(toDelete);
+}
+
+export type ToastVariant = 'success' | 'warning' | 'error' | 'info';
+
+export const TOAST_VARIANT_TITLES: Record<ToastVariant, string> = {
+  success: 'THÀNH CÔNG!',
+  warning: 'CẢNH BÁO!',
+  error: 'LỖI THAO TÁC!',
+  info: 'THÔNG BÁO!',
+};
+
+/**
+ * Tự động phân loại mức độ thông báo (success / warning / error / info) từ cờ lỗi hoặc nội dung thông điệp.
+ */
+export function resolveToastVariant(
+  msg: string,
+  variantOrIsError: boolean | ToastVariant = false
+): ToastVariant {
+  if (typeof variantOrIsError === 'string') {
+    return variantOrIsError;
+  }
+  const lower = msg.trim().toLowerCase();
+  if (variantOrIsError) {
+    const isWarningMessage =
+      lower.includes('nhưng') ||
+      lower.startsWith('vui lòng') ||
+      lower.includes('cảnh báo') ||
+      lower.includes('chưa cấu hình') ||
+      lower.includes('không đọc được dòng dữ liệu nào');
+    return isWarningMessage ? 'warning' : 'error';
+  }
+  const isInfoMessage =
+    lower.includes('đã tạm tắt') ||
+    lower.includes('sao chép') ||
+    lower.startsWith('thông báo') ||
+    lower.startsWith('đang ');
+  return isInfoMessage ? 'info' : 'success';
+}
+
+
+
+

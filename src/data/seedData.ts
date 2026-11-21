@@ -90,7 +90,6 @@ create table if not exists public.questions (
   type text not null check (type in ('single', 'multiple', 'true_false', 'matching', 'hotspot')),
   prompt text not null,
   instruction text,
-  difficulty text not null check (difficulty in ('easy', 'medium', 'hard')) default 'medium',
   payload jsonb not null,
   explanation text not null default '',
   tips text,
@@ -106,6 +105,8 @@ alter table public.questions
   add column if not exists content_code text not null default 'GM1';
 alter table public.questions
   add column if not exists topic_order integer not null default 1;
+alter table public.questions
+  drop column if exists difficulty;
 
 create index if not exists idx_questions_part_order
   on public.questions (module, category, content_code, topic_order);
@@ -389,7 +390,39 @@ begin
       tbl
     );
   end loop;
-end $$;`;
+end $$;
+
+-- =========================================================
+-- 7. SUPABASE STORAGE CHO ẢNH CÂU HỎI CHỌN ĐIỂM (HOTSPOT)
+-- =========================================================
+insert into storage.buckets (id, name, public)
+values ('hotspot-images', 'hotspot-images', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists "ic3_hotspot_images_public_read" on storage.objects;
+create policy "ic3_hotspot_images_public_read"
+  on storage.objects for select
+  to anon, authenticated
+  using (bucket_id = 'hotspot-images');
+
+drop policy if exists "ic3_hotspot_images_upload" on storage.objects;
+create policy "ic3_hotspot_images_upload"
+  on storage.objects for insert
+  to anon, authenticated
+  with check (bucket_id = 'hotspot-images');
+
+drop policy if exists "ic3_hotspot_images_update" on storage.objects;
+create policy "ic3_hotspot_images_update"
+  on storage.objects for update
+  to anon, authenticated
+  using (bucket_id = 'hotspot-images')
+  with check (bucket_id = 'hotspot-images');
+
+drop policy if exists "ic3_hotspot_images_delete" on storage.objects;
+create policy "ic3_hotspot_images_delete"
+  on storage.objects for delete
+  to anon, authenticated
+  using (bucket_id = 'hotspot-images');`;
 
 export function createSeedDatabase(): AdminDatabase {
   const now = '2026-11-15T08:00:00.000Z';
@@ -781,7 +814,6 @@ export function createSeedDatabase(): AdminDatabase {
         prompt:
           'Loại bộ nhớ nào mất toàn bộ dữ liệu đang lưu trữ khi máy tính bị tắt nguồn đột ngột?',
         instruction: 'Chọn một đáp án đúng nhất.',
-        difficulty: 'easy',
         payload: {
           options: [
             { id: 'opt_1', text: 'RAM (Random Access Memory)' },
@@ -808,7 +840,6 @@ export function createSeedDatabase(): AdminDatabase {
         type: 'multiple',
         prompt: 'Những thiết bị nào sau đây thuộc nhóm thiết bị NHẬP dữ liệu (Input Devices)?',
         instruction: 'Chọn TẤT CẢ đáp án đúng.',
-        difficulty: 'medium',
         payload: {
           options: [
             { id: 'opt_1', text: 'Bàn phím cơ (Keyboard)' },
@@ -836,7 +867,6 @@ export function createSeedDatabase(): AdminDatabase {
         prompt:
           'Xác định tính Đúng hoặc Sai của các phát biểu sau về quản lý tệp tin trên Windows:',
         instruction: 'Chọn Đúng hoặc Sai cho từng ý.',
-        difficulty: 'medium',
         payload: {
           statements: [
             {
@@ -875,7 +905,6 @@ export function createSeedDatabase(): AdminDatabase {
         type: 'matching',
         prompt: 'Ghép nối từng chuẩn cổng kết nối ở Cột A với công dụng chính ở Cột B:',
         instruction: 'Chọn cặp tương ứng 1-A, 2-B...',
-        difficulty: 'medium',
         payload: {
           matchingLeft: [
             { id: 'l1', text: 'HDMI' },
@@ -909,7 +938,6 @@ export function createSeedDatabase(): AdminDatabase {
         prompt:
           'Trên bảng mặt sau của thùng máy tính (PC Hardware Ports), hãy nhấp vào vị trí cổng mạng dây Ethernet (RJ-45).',
         instruction: 'Nhấp chuột trực tiếp vào vùng cổng tương ứng trên hình.',
-        difficulty: 'medium',
         payload: {
           hotspotType: 'pc_hardware_ports',
           imageAlt: 'Sơ đồ các cổng kết nối mặt sau máy tính để bàn',
@@ -937,7 +965,6 @@ export function createSeedDatabase(): AdminDatabase {
         prompt:
           'Trên thanh Ribbon thẻ Home của Microsoft Word, hãy chọn nút lệnh dùng để sao chép định dạng (Format Painter).',
         instruction: 'Nhấp vào biểu tượng cây cọ Format Painter trên thanh Ribbon.',
-        difficulty: 'easy',
         payload: {
           hotspotType: 'word_ribbon',
           imageAlt: 'Thanh công cụ Home Ribbon trong Microsoft Word',
@@ -965,7 +992,6 @@ export function createSeedDatabase(): AdminDatabase {
         prompt:
           'Trong giao diện Excel Ribbon, hãy nhấp chọn lệnh "Merge & Center" để gộp nhiều ô và căn giữa nội dung tiêu đề.',
         instruction: 'Chọn đúng nút Merge & Center trong nhóm Alignment.',
-        difficulty: 'medium',
         payload: {
           hotspotType: 'excel_ribbon',
           imageAlt: 'Thanh công cụ Home Ribbon trong Microsoft Excel',
@@ -992,7 +1018,6 @@ export function createSeedDatabase(): AdminDatabase {
         type: 'single',
         prompt:
           'Trong Excel, công thức nào đếm số lượng ô có chứa GIÁ TRỊ SỐ trong vùng từ A1 đến A10?',
-        difficulty: 'easy',
         payload: {
           options: [
             { id: 'opt_1', text: '=COUNTA(A1:A10)' },
@@ -1016,7 +1041,6 @@ export function createSeedDatabase(): AdminDatabase {
         topic: 'Microsoft PowerPoint — Trình chiếu',
         type: 'true_false',
         prompt: 'Đánh giá các phát biểu sau về thiết kế bài thuyết trình PowerPoint:',
-        difficulty: 'medium',
         payload: {
           statements: [
             {
@@ -1051,7 +1075,6 @@ export function createSeedDatabase(): AdminDatabase {
         type: 'hotspot',
         prompt:
           'Trên thanh địa chỉ trình duyệt web, hãy nhấp vào biểu tượng chứng chỉ kết nối an toàn HTTPS (ổ khóa bảo mật).',
-        difficulty: 'easy',
         payload: {
           hotspotType: 'browser_security',
           imageAlt: 'Thanh địa chỉ và chứng chỉ HTTPS của trình duyệt',
@@ -1078,7 +1101,6 @@ export function createSeedDatabase(): AdminDatabase {
         type: 'single',
         prompt:
           'Khi gửi thư mời cho 30 phụ huynh mà không muốn người nhận nhìn thấy địa chỉ email của nhau, giáo viên nên nhập danh sách vào trường nào?',
-        difficulty: 'easy',
         payload: {
           options: [
             { id: 'opt_1', text: 'To' },
@@ -1102,7 +1124,6 @@ export function createSeedDatabase(): AdminDatabase {
         topic: 'An toàn & Công dân số',
         type: 'multiple',
         prompt: 'Những dấu hiệu nào cảnh báo một email có nguy cơ lừa đảo (Phishing)?',
-        difficulty: 'medium',
         payload: {
           options: [
             { id: 'opt_1', text: 'Thúc giục xác minh mật khẩu gấp trong 2 giờ nếu không sẽ khóa tài khoản' },

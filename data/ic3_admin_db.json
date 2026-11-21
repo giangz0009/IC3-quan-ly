@@ -1,0 +1,1460 @@
+{
+  "schools": [
+    {
+      "id": "school_nd",
+      "name": "THCS Nguyễn Du",
+      "district": "Quận 1, TP.HCM",
+      "createdAt": "2026-09-01T08:00:00.000Z"
+    },
+    {
+      "id": "school_lqd",
+      "name": "THCS Lê Quý Đôn",
+      "district": "Quận 3, TP.HCM",
+      "createdAt": "2026-09-02T08:00:00.000Z"
+    }
+  ],
+  "classes": [
+    {
+      "id": "class_nd_6a1",
+      "schoolId": "school_nd",
+      "name": "6A1",
+      "grade": "Khối 6",
+      "createdAt": "2026-09-05T08:00:00.000Z"
+    },
+    {
+      "id": "class_nd_6a2",
+      "schoolId": "school_nd",
+      "name": "6A2",
+      "grade": "Khối 6",
+      "createdAt": "2026-09-05T08:00:00.000Z"
+    },
+    {
+      "id": "class_nd_7a1",
+      "schoolId": "school_nd",
+      "name": "7A1",
+      "grade": "Khối 7",
+      "createdAt": "2026-09-05T08:00:00.000Z"
+    },
+    {
+      "id": "class_lqd_8a1",
+      "schoolId": "school_lqd",
+      "name": "8A1",
+      "grade": "Khối 8",
+      "createdAt": "2026-09-06T08:00:00.000Z"
+    }
+  ],
+  "students": [
+    {
+      "id": "st_6a1_01",
+      "classId": "class_nd_6a1",
+      "fullName": "Đỗ Gia Huy",
+      "studentCode": "6A1-01",
+      "passwordHash": "dogiahuy",
+      "isCustomPassword": false,
+      "alwaysBreakReady": false,
+      "createdAt": "2026-09-08T08:00:00.000Z"
+    },
+    {
+      "id": "st_6a1_02",
+      "classId": "class_nd_6a1",
+      "fullName": "Nguyễn Văn An",
+      "studentCode": "6A1-02",
+      "passwordHash": "an2026",
+      "isCustomPassword": true,
+      "alwaysBreakReady": false,
+      "createdAt": "2026-09-08T08:00:00.000Z"
+    },
+    {
+      "id": "st_6a1_03",
+      "classId": "class_nd_6a1",
+      "fullName": "Trần Minh Thư",
+      "studentCode": "6A1-03",
+      "passwordHash": "tranminhthu",
+      "isCustomPassword": false,
+      "alwaysBreakReady": false,
+      "createdAt": "2026-09-08T08:00:00.000Z"
+    },
+    {
+      "id": "st_6a1_04",
+      "classId": "class_nd_6a1",
+      "fullName": "Lê Hoàng Phúc",
+      "studentCode": "6A1-04",
+      "passwordHash": "lehoangphuc",
+      "isCustomPassword": false,
+      "alwaysBreakReady": false,
+      "createdAt": "2026-09-08T08:00:00.000Z"
+    },
+    {
+      "id": "st_6a1_05",
+      "classId": "class_nd_6a1",
+      "fullName": "Phạm Bảo Ngọc",
+      "studentCode": "6A1-05",
+      "passwordHash": "phambaongoc",
+      "isCustomPassword": false,
+      "alwaysBreakReady": false,
+      "createdAt": "2026-09-08T08:00:00.000Z"
+    },
+    {
+      "id": "st_6a1_demo",
+      "classId": "class_nd_6a1",
+      "fullName": "Tài khoản Kiểm thử Giải lao",
+      "studentCode": "DEMO-BREAK",
+      "passwordHash": "taikhoankiemthugiailao",
+      "isCustomPassword": false,
+      "alwaysBreakReady": true,
+      "createdAt": "2026-09-08T08:00:00.000Z"
+    },
+    {
+      "id": "st_6a2_01",
+      "classId": "class_nd_6a2",
+      "fullName": "Võ Quốc Khánh",
+      "studentCode": "6A2-01",
+      "passwordHash": "voquockhanh",
+      "isCustomPassword": false,
+      "alwaysBreakReady": false,
+      "createdAt": "2026-09-09T08:00:00.000Z"
+    },
+    {
+      "id": "st_6a2_02",
+      "classId": "class_nd_6a2",
+      "fullName": "Đặng Thảo Vy",
+      "studentCode": "6A2-02",
+      "passwordHash": "vyic3",
+      "isCustomPassword": true,
+      "alwaysBreakReady": false,
+      "createdAt": "2026-09-09T08:00:00.000Z"
+    },
+    {
+      "id": "st_7a1_01",
+      "classId": "class_nd_7a1",
+      "fullName": "Huỳnh Đức Thịnh",
+      "studentCode": "7A1-01",
+      "passwordHash": "huynhducthinh",
+      "isCustomPassword": false,
+      "alwaysBreakReady": false,
+      "createdAt": "2026-09-10T08:00:00.000Z"
+    },
+    {
+      "id": "st_7a1_02",
+      "classId": "class_nd_7a1",
+      "fullName": "Bùi Phương Linh",
+      "studentCode": "7A1-02",
+      "passwordHash": "buiphuonglinh",
+      "isCustomPassword": false,
+      "alwaysBreakReady": false,
+      "createdAt": "2026-09-10T08:00:00.000Z"
+    },
+    {
+      "id": "st_8a1_01",
+      "classId": "class_lqd_8a1",
+      "fullName": "Ngô Tấn Tài",
+      "studentCode": "8A1-01",
+      "passwordHash": "ngotantai",
+      "isCustomPassword": false,
+      "alwaysBreakReady": false,
+      "createdAt": "2026-09-11T08:00:00.000Z"
+    },
+    {
+      "id": "st_8a1_02",
+      "classId": "class_lqd_8a1",
+      "fullName": "Dương Khánh Linh",
+      "studentCode": "8A1-02",
+      "passwordHash": "duongkhanhlinh",
+      "isCustomPassword": false,
+      "alwaysBreakReady": false,
+      "createdAt": "2026-09-11T08:00:00.000Z"
+    }
+  ],
+  "teachers": [
+    {
+      "userId": "teacher_admin_01",
+      "fullName": "Thầy Nguyễn Hoàng Minh",
+      "email": "admin@ic3master.edu.vn",
+      "password": "admin123",
+      "role": "super_admin",
+      "schoolId": null,
+      "createdAt": "2026-09-01T07:00:00.000Z"
+    },
+    {
+      "userId": "teacher_nd_01",
+      "fullName": "Cô Trần Thanh Hà",
+      "email": "ha.tran@nguyendu.edu.vn",
+      "password": "teacher123",
+      "role": "teacher",
+      "schoolId": "school_nd",
+      "createdAt": "2026-09-02T07:00:00.000Z"
+    }
+  ],
+  "modules": [
+    {
+      "id": "mod_lv1",
+      "code": "computing_fundamentals",
+      "level": "LV1",
+      "title": "Máy tính căn bản (LV1)",
+      "description": "Phần cứng, bộ nhớ, thiết bị ngoại vi, hệ điều hành Windows và quản lý tệp tin.",
+      "orderIndex": 1
+    },
+    {
+      "id": "mod_lv2",
+      "code": "key_applications",
+      "level": "LV2",
+      "title": "Ứng dụng chủ chốt (LV2)",
+      "description": "Microsoft Word, Excel, PowerPoint, định dạng văn bản, hàm tính toán và trình chiếu.",
+      "orderIndex": 2
+    },
+    {
+      "id": "mod_lv3",
+      "code": "living_online",
+      "level": "LV3",
+      "title": "Level (LV3)",
+      "description": "",
+      "orderIndex": 3
+    }
+  ],
+  "knowledgeCategories": [
+    {
+      "id": "cat_lv1_gm",
+      "module": "computing_fundamentals",
+      "code": "GM",
+      "title": "Nhóm GM — Chuẩn GMetrix",
+      "description": "Kiến thức nền tảng và dạng bài bám sát cấu trúc đề thi chuẩn GMetrix.",
+      "orderIndex": 1
+    },
+    {
+      "id": "cat_lv1_ot",
+      "module": "computing_fundamentals",
+      "code": "OT",
+      "title": "Nhóm OT — Chuyên đề Ôn tập",
+      "description": "Chuyên đề ôn luyện mở rộng, bổ sung và tổng hợp theo từng phần.",
+      "orderIndex": 2
+    },
+    {
+      "id": "cat_lv2_gm",
+      "module": "key_applications",
+      "code": "GM",
+      "title": "Nhóm GM — Chuẩn GMetrix",
+      "description": "Thực hành Word, Excel, PowerPoint theo chuẩn đề thi GMetrix.",
+      "orderIndex": 1
+    },
+    {
+      "id": "cat_lv2_ot",
+      "module": "key_applications",
+      "code": "OT",
+      "title": "Nhóm OT — Chuyên đề Ôn tập",
+      "description": "Ôn tập công thức, định dạng và xử lý tình huống văn phòng.",
+      "orderIndex": 2
+    },
+    {
+      "id": "cat_lv3_gm",
+      "module": "living_online",
+      "code": "GM",
+      "title": "Nhóm GM — Chuẩn GMetrix",
+      "description": "Trình duyệt, Email, mạng xã hội và an toàn số theo chuẩn GMetrix.",
+      "orderIndex": 1
+    },
+    {
+      "id": "cat_lv3_ot",
+      "module": "living_online",
+      "code": "OT",
+      "title": "Nhóm OT — Chuyên đề Ôn tập",
+      "description": "Chuyên đề ôn luyện mở rộng, bổ sung và tổng hợp theo từng phần.",
+      "orderIndex": 2
+    }
+  ],
+  "knowledgeParts": [
+    {
+      "id": "part_lv1_gm1",
+      "module": "computing_fundamentals",
+      "level": "LV1",
+      "category": "GM",
+      "code": "GM1",
+      "title": "Phần cứng & Bộ nhớ máy tính",
+      "description": "CPU, RAM, ROM, thiết bị nhập xuất và cổng kết nối.",
+      "orderIndex": 1
+    },
+    {
+      "id": "part_lv1_gm2",
+      "module": "computing_fundamentals",
+      "level": "LV1",
+      "category": "GM",
+      "code": "GM2",
+      "title": "Hệ điều hành & Quản lý tệp",
+      "description": "Tệp tin, thư mục, phím tắt và cấu hình Windows.",
+      "orderIndex": 2
+    },
+    {
+      "id": "part_lv1_gm3",
+      "module": "computing_fundamentals",
+      "level": "LV1",
+      "category": "GM",
+      "code": "GM3",
+      "title": "Bảo trì Hệ thống & Sao lưu Dữ liệu",
+      "description": "Sao lưu đám mây, cập nhật hệ điều hành và dọn dẹp ổ đĩa.",
+      "orderIndex": 3
+    },
+    {
+      "id": "part_lv1_ot1",
+      "module": "computing_fundamentals",
+      "level": "LV1",
+      "category": "OT",
+      "code": "OT1",
+      "title": "Tổng hợp Phần cứng & Lưu trữ",
+      "description": "Bài tập phân biệt bộ nhớ và đơn vị đo dữ liệu.",
+      "orderIndex": 1
+    },
+    {
+      "id": "part_lv2_gm1",
+      "module": "key_applications",
+      "level": "LV2",
+      "category": "GM",
+      "code": "GM1",
+      "title": "Soạn thảo văn bản Microsoft Word",
+      "description": "Thanh Ribbon, định dạng đoạn văn, bảng biểu và in ấn.",
+      "orderIndex": 1
+    },
+    {
+      "id": "part_lv2_gm2",
+      "module": "key_applications",
+      "level": "LV2",
+      "category": "GM",
+      "code": "GM2",
+      "title": "Microsoft Excel & Hàm tính toán",
+      "description": "Merge & Center, hàm COUNT, COUNTA, SUM, AVERAGE.",
+      "orderIndex": 2
+    },
+    {
+      "id": "part_lv2_ot1",
+      "module": "key_applications",
+      "level": "LV2",
+      "category": "OT",
+      "code": "OT1",
+      "title": "Bảng tính Microsoft Excel",
+      "description": "Địa chỉ ô, hàm SUM/AVERAGE/IF và biểu đồ.",
+      "orderIndex": 1
+    },
+    {
+      "id": "part_lv2_ot2",
+      "module": "key_applications",
+      "level": "LV2",
+      "category": "OT",
+      "code": "OT2",
+      "title": "Hàm nâng cao & Định dạng trang in Excel",
+      "description": "Hàm IF, VLOOKUP cơ bản, thiết lập vùng in và tiêu đề lặp lại.",
+      "orderIndex": 2
+    },
+    {
+      "id": "part_lv3_gm1",
+      "module": "living_online",
+      "level": "LV3",
+      "category": "GM",
+      "code": "GM1",
+      "title": "Internet, HTTPS & An toàn số",
+      "description": "Giao thức bảo mật, nhận diện lừa đảo và gửi Email.",
+      "orderIndex": 1
+    },
+    {
+      "id": "part_lv3_ot1",
+      "module": "living_online",
+      "level": "LV3",
+      "category": "OT",
+      "code": "OT1",
+      "title": "Phòng chống Lừa đảo (Phishing) & Công dân số",
+      "description": "Nhận diện email giả mạo và bảo mật 2 lớp (2FA).",
+      "orderIndex": 1
+    },
+    {
+      "id": "part_lv3_ot2",
+      "module": "living_online",
+      "level": "LV3",
+      "category": "OT",
+      "code": "OT2",
+      "title": "Dấu chân số & Bản quyền nội dung số",
+      "description": "Creative Commons, trích dẫn nguồn và bảo vệ quyền riêng tư.",
+      "orderIndex": 2
+    }
+  ],
+  "questions": [
+    {
+      "id": "q_sb_lv1_gm2_01",
+      "module": "computing_fundamentals",
+      "level": "LV1",
+      "category": "GM",
+      "contentCode": "GM2",
+      "topicOrder": 1,
+      "topic": "Quản lý tệp tin",
+      "type": "true_false",
+      "prompt": "Xác định tính Đúng hoặc Sai của các phát biểu về thao tác tệp tin trên Windows:",
+      "instruction": "Đánh dấu Đúng hoặc Sai cho từng ý.",
+      "difficulty": "medium",
+      "payload": {
+        "statements": [
+          {
+            "id": "s1",
+            "text": "Nhấn Delete trên bàn phím sẽ đưa tệp vào Recycle Bin (thùng rác).",
+            "isTrue": true
+          },
+          {
+            "id": "s2",
+            "text": "Nhấn Shift + Delete sẽ xóa vĩnh viễn tệp mà không qua Recycle Bin.",
+            "isTrue": true
+          },
+          {
+            "id": "s3",
+            "text": "Hai tệp cùng tên và cùng phần mở rộng có thể nằm chung trong một thư mục.",
+            "isTrue": false
+          }
+        ]
+      },
+      "explanation": "Shift + Delete xóa thẳng không qua thùng rác; trong cùng 1 thư mục không thể có 2 tệp trùng tên và trùng phần mở rộng.",
+      "createdAt": "2026-11-19T05:59:08.819476+00:00",
+      "updatedAt": "2026-11-19T05:59:08.819476+00:00"
+    },
+    {
+      "id": "q_sb_lv1_gm3_01",
+      "module": "computing_fundamentals",
+      "level": "LV1",
+      "category": "GM",
+      "contentCode": "GM3",
+      "topicOrder": 1,
+      "topic": "Sao lưu & Bảo trì",
+      "type": "true_false",
+      "prompt": "Đánh giá tính Đúng hoặc Sai của các nhận định sau về sao lưu dữ liệu (Backup):",
+      "instruction": "Chọn Đúng hoặc Sai cho từng phát biểu.",
+      "difficulty": "medium",
+      "payload": {
+        "statements": [
+          {
+            "id": "st_1",
+            "text": "Sao lưu lên dịch vụ đám mây (OneDrive/Google Drive) giúp khôi phục tệp khi ổ cứng hỏng.",
+            "isTrue": true
+          },
+          {
+            "id": "st_2",
+            "text": "Chỉ cần sao lưu tệp vào cùng một phân vùng ổ C để đảm bảo an toàn khi hỏng ổ cứng.",
+            "isTrue": false
+          },
+          {
+            "id": "st_3",
+            "text": "Nên áp dụng quy tắc sao lưu định kỳ và lưu ít nhất một bản ở thiết bị/nơi tách biệt.",
+            "isTrue": true
+          }
+        ]
+      },
+      "explanation": "Bản sao lưu phải nằm ở thiết bị khác hoặc trên đám mây; nếu để chung ổ cứng vật lý thì khi ổ hỏng sẽ mất cả bản chính lẫn bản sao.",
+      "createdAt": "2026-11-19T02:14:53.685717+00:00",
+      "updatedAt": "2026-11-19T05:41:36.846085+00:00"
+    },
+    {
+      "id": "q_sb_lv1_gm3_02",
+      "module": "computing_fundamentals",
+      "level": "LV1",
+      "category": "GM",
+      "contentCode": "GM3",
+      "topicOrder": 2,
+      "topic": "Sao lưu dữ liệu",
+      "type": "multiple",
+      "prompt": "Những phương án nào sau đây giúp sao lưu (Backup) tệp tin an toàn khi ổ cứng máy tính bị hỏng?",
+      "instruction": "Chọn TẤT CẢ đáp án đúng.",
+      "difficulty": "medium",
+      "payload": {
+        "options": [
+          {
+            "id": "opt_1",
+            "text": "Lưu đồng bộ lên OneDrive hoặc Google Drive"
+          },
+          {
+            "id": "opt_2",
+            "text": "Sao chép ra ổ cứng gắn ngoài (External HDD/SSD)"
+          },
+          {
+            "id": "opt_3",
+            "text": "Tạo thêm một thư mục cùng tên trên ổ C:"
+          },
+          {
+            "id": "opt_4",
+            "text": "Sao lưu sang USB lưu trữ rời"
+          }
+        ],
+        "correctOptionIds": [
+          "opt_1",
+          "opt_2",
+          "opt_4"
+        ]
+      },
+      "explanation": "Sao lưu an toàn phải nằm trên thiết bị vật lý khác hoặc dịch vụ đám mây, không nằm chung ổ cứng đang dùng.",
+      "tips": "Tránh lưu bản sao dự phòng trên cùng phân vùng ổ C:.",
+      "createdAt": "2026-11-19T02:14:53.685717+00:00",
+      "updatedAt": "2026-11-19T02:18:28.477569+00:00"
+    },
+    {
+      "id": "q_sb_lv2_gm1_01",
+      "module": "key_applications",
+      "level": "LV2",
+      "category": "GM",
+      "contentCode": "GM1",
+      "topicOrder": 1,
+      "topic": "Thanh công cụ Word Ribbon",
+      "type": "hotspot",
+      "prompt": "Nhấp vào nút In đậm (Bold - biểu tượng chữ B) trên thanh công cụ Microsoft Word.",
+      "instruction": "Click trực tiếp vào vị trí nút lệnh trên ảnh giao diện.",
+      "difficulty": "easy",
+      "payload": {
+        "imageAlt": "Giao diện Microsoft Word Ribbon",
+        "hotspotType": "word_ribbon",
+        "hotspotTarget": {
+          "maxX": 23,
+          "maxY": 58,
+          "minX": 18,
+          "minY": 42,
+          "label": "Nút In đậm (Bold)"
+        }
+      },
+      "explanation": "Nút B (Bold) nằm trong nhóm Font thuộc thẻ Home (phím tắt Ctrl + B).",
+      "tips": "Quan sát nhóm Font trên thẻ Home.",
+      "createdAt": "2026-11-19T05:41:36.846085+00:00",
+      "updatedAt": "2026-11-19T05:59:08.819476+00:00"
+    },
+    {
+      "id": "q_sb_lv2_gm2_01",
+      "module": "key_applications",
+      "level": "LV2",
+      "category": "GM",
+      "contentCode": "GM2",
+      "topicOrder": 1,
+      "topic": "Microsoft Excel — Hàm cơ bản",
+      "type": "matching",
+      "prompt": "Ghép tên hàm Excel ở Cột A với công dụng đúng ở Cột B:",
+      "instruction": "Chọn cặp tương ứng.",
+      "difficulty": "easy",
+      "payload": {
+        "correctPairs": [
+          {
+            "leftId": "l1",
+            "rightId": "r2"
+          },
+          {
+            "leftId": "l2",
+            "rightId": "r3"
+          },
+          {
+            "leftId": "l3",
+            "rightId": "r1"
+          }
+        ],
+        "matchingLeft": [
+          {
+            "id": "l1",
+            "text": "=SUM(A1:A10)"
+          },
+          {
+            "id": "l2",
+            "text": "=AVERAGE(A1:A10)"
+          },
+          {
+            "id": "l3",
+            "text": "=MAX(A1:A10)"
+          }
+        ],
+        "matchingRight": [
+          {
+            "id": "r1",
+            "text": "Tìm giá trị lớn nhất trong vùng"
+          },
+          {
+            "id": "r2",
+            "text": "Tính tổng các giá trị số"
+          },
+          {
+            "id": "r3",
+            "text": "Tính trung bình cộng"
+          }
+        ]
+      },
+      "explanation": "SUM tính tổng, AVERAGE tính trung bình cộng, MAX tìm giá trị lớn nhất.",
+      "createdAt": "2026-11-19T05:41:36.846085+00:00",
+      "updatedAt": "2026-11-19T05:41:36.846085+00:00"
+    },
+    {
+      "id": "q_sb_lv2_ot1_01",
+      "module": "key_applications",
+      "level": "LV2",
+      "category": "OT",
+      "contentCode": "OT1",
+      "topicOrder": 1,
+      "topic": "Hàm Excel cơ bản",
+      "type": "matching",
+      "prompt": "Ghép tên hàm Excel ở cột A với công dụng tương ứng ở cột B:",
+      "instruction": "Chọn cặp tương ứng giữa 2 cột.",
+      "difficulty": "medium",
+      "payload": {
+        "correctPairs": [
+          {
+            "leftId": "l1",
+            "rightId": "r2"
+          },
+          {
+            "leftId": "l2",
+            "rightId": "r3"
+          },
+          {
+            "leftId": "l3",
+            "rightId": "r1"
+          }
+        ],
+        "matchingLeft": [
+          {
+            "id": "l1",
+            "text": "=SUM(A1:A5)"
+          },
+          {
+            "id": "l2",
+            "text": "=AVERAGE(A1:A5)"
+          },
+          {
+            "id": "l3",
+            "text": "=MAX(A1:A5)"
+          }
+        ],
+        "matchingRight": [
+          {
+            "id": "r1",
+            "text": "Tìm giá trị lớn nhất trong vùng"
+          },
+          {
+            "id": "r2",
+            "text": "Tính tổng các ô từ A1 đến A5"
+          },
+          {
+            "id": "r3",
+            "text": "Tính trung bình cộng vùng A1:A5"
+          }
+        ]
+      },
+      "explanation": "SUM tính tổng, AVERAGE tính trung bình cộng, MAX tìm giá trị lớn nhất.",
+      "tips": "Đọc kỹ tên tiếng Anh của hàm để suy ra công dụng.",
+      "createdAt": "2026-11-19T05:59:08.819476+00:00",
+      "updatedAt": "2026-11-19T05:59:08.819476+00:00"
+    },
+    {
+      "id": "q_sb_lv2_ot2_01",
+      "module": "key_applications",
+      "level": "LV2",
+      "category": "OT",
+      "contentCode": "OT2",
+      "topicOrder": 1,
+      "topic": "Hàm & In ấn Excel",
+      "type": "true_false",
+      "prompt": "Xác định tính Đúng/Sai cho các phát biểu sau về Microsoft Excel:",
+      "instruction": "Đánh dấu Đúng hoặc Sai cho từng phát biểu.",
+      "difficulty": "medium",
+      "payload": {
+        "statements": [
+          {
+            "id": "st_1",
+            "text": "Hàm =IF(A1>=5, \"Đạt\", \"Chưa đạt\") trả về \"Đạt\" khi A1 bằng 5.",
+            "isTrue": true
+          },
+          {
+            "id": "st_2",
+            "text": "Tính năng Print Titles cho phép lặp lại dòng tiêu đề ở đầu mỗi trang in.",
+            "isTrue": true
+          },
+          {
+            "id": "st_3",
+            "text": "Công thức trong Excel bắt buộc bắt đầu bằng dấu hai chấm (:).",
+            "isTrue": false
+          }
+        ]
+      },
+      "explanation": "Công thức Excel luôn bắt đầu bằng dấu bằng (=), không phải dấu hai chấm.",
+      "tips": "Nhớ cấu trúc =IF(điều_kiện, giá_trị_đúng, giá_trị_sai).",
+      "createdAt": "2026-11-19T02:14:53.685717+00:00",
+      "updatedAt": "2026-11-19T02:18:28.477569+00:00"
+    },
+    {
+      "id": "q_sb_lv2_ot2_02",
+      "module": "key_applications",
+      "level": "LV2",
+      "category": "OT",
+      "contentCode": "OT2",
+      "topicOrder": 2,
+      "topic": "Thanh công cụ Excel",
+      "type": "hotspot",
+      "prompt": "Nhấp chọn vị trí nút lệnh Gộp ô và Căn giữa (Merge & Center) trên thanh Ribbon của Excel:",
+      "instruction": "Chạm vào vùng nút Merge & Center trên hình minh họa.",
+      "difficulty": "medium",
+      "payload": {
+        "imageAlt": "Giao diện Microsoft Excel Ribbon",
+        "hotspotType": "excel_ribbon",
+        "hotspotTarget": {
+          "maxX": 54,
+          "maxY": 72,
+          "minX": 43,
+          "minY": 48,
+          "label": "Merge & Center"
+        }
+      },
+      "explanation": "Nút Merge & Center nằm trong nhóm Alignment trên thẻ Home.",
+      "createdAt": "2026-11-19T02:14:53.685717+00:00",
+      "updatedAt": "2026-11-19T02:18:28.477569+00:00"
+    },
+    {
+      "id": "q_sb_lv3_gm1_01",
+      "module": "living_online",
+      "level": "LV3",
+      "category": "GM",
+      "contentCode": "GM1",
+      "topicOrder": 1,
+      "topic": "Bảo mật trình duyệt",
+      "type": "single",
+      "prompt": "Biểu tượng ổ khóa cùng tiền tố https:// trên thanh địa chỉ trình duyệt thể hiện điều gì?",
+      "instruction": "Chọn 1 đáp án đúng.",
+      "difficulty": "easy",
+      "payload": {
+        "options": [
+          {
+            "id": "a",
+            "text": "Kết nối giữa trình duyệt và máy chủ được mã hóa bảo mật (TLS/SSL)"
+          },
+          {
+            "id": "b",
+            "text": "Trang web không bao giờ chứa virus hoặc quảng cáo"
+          },
+          {
+            "id": "c",
+            "text": "Máy tính đang truy cập mạng ngoại tuyến"
+          },
+          {
+            "id": "d",
+            "text": "Trang web thuộc sở hữu của nhà cung cấp mạng"
+          }
+        ],
+        "correctOptionId": "a"
+      },
+      "explanation": "HTTPS mã hóa dữ liệu truyền tải giúp tránh bị nghe lén trên đường truyền.",
+      "tips": "HTTPS bảo mật đường truyền, vẫn cần cảnh giác trang giả mạo (Phishing).",
+      "createdAt": "2026-11-19T05:59:08.819476+00:00",
+      "updatedAt": "2026-11-19T05:59:08.819476+00:00"
+    },
+    {
+      "id": "q_sb_lv3_ot1_01",
+      "module": "living_online",
+      "level": "LV3",
+      "category": "OT",
+      "contentCode": "OT1",
+      "topicOrder": 1,
+      "topic": "Bảo mật tài khoản",
+      "type": "single",
+      "prompt": "Biện pháp nào hiệu quả nhất để bảo vệ tài khoản ngay cả khi kẻ gian biết được mật khẩu đăng nhập?",
+      "instruction": "Chọn một đáp án đúng.",
+      "difficulty": "easy",
+      "payload": {
+        "options": [
+          {
+            "id": "opt_1",
+            "text": "Bật xác thực hai yếu tố (2FA)"
+          },
+          {
+            "id": "opt_2",
+            "text": "Lưu mật khẩu trong tệp ghi chú ngoài màn hình"
+          },
+          {
+            "id": "opt_3",
+            "text": "Dùng chung một mật khẩu cho mọi trang web"
+          },
+          {
+            "id": "opt_4",
+            "text": "Tắt chế độ cập nhật trình duyệt"
+          }
+        ],
+        "correctOptionId": "opt_1"
+      },
+      "explanation": "Xác thực hai yếu tố (2FA) yêu cầu thêm mã OTP hoặc khóa xác thực từ thiết bị cá nhân của chủ tài khoản.",
+      "createdAt": "2026-11-19T05:41:36.846085+00:00",
+      "updatedAt": "2026-11-19T05:41:36.846085+00:00"
+    },
+    {
+      "id": "q_0112dbdb",
+      "module": "living_online",
+      "level": "LV3",
+      "category": "OT",
+      "contentCode": "OT1",
+      "topicOrder": 2,
+      "topic": "Phần cứng & Hệ điều hành",
+      "type": "single",
+      "prompt": "Kiểm thử câu hỏi",
+      "difficulty": "medium",
+      "payload": {
+        "options": [
+          {
+            "id": "opt_1",
+            "text": "Kiểm thử đáp án 1"
+          },
+          {
+            "id": "opt_2",
+            "text": "Kiểm thử đáp án 2"
+          },
+          {
+            "id": "opt_3",
+            "text": "Kiểm thử đáp án 3"
+          },
+          {
+            "id": "opt_4",
+            "text": "Kiểm thử đáp án 4"
+          }
+        ],
+        "correctOptionId": "opt_4"
+      },
+      "explanation": "",
+      "createdAt": "2026-11-20T10:11:00.698+00:00",
+      "updatedAt": "2026-11-20T10:11:00.698+00:00"
+    },
+    {
+      "id": "q_sb_lv3_ot2_01",
+      "module": "living_online",
+      "level": "LV3",
+      "category": "OT",
+      "contentCode": "OT2",
+      "topicOrder": 1,
+      "topic": "Bản quyền & Công dân số",
+      "type": "matching",
+      "prompt": "Ghép các ký hiệu giấy phép Creative Commons ở Cột A với ý nghĩa tương ứng ở Cột B:",
+      "instruction": "Chọn cặp tương ứng đúng.",
+      "difficulty": "hard",
+      "payload": {
+        "correctPairs": [
+          {
+            "leftId": "l1",
+            "rightId": "r2"
+          },
+          {
+            "leftId": "l2",
+            "rightId": "r1"
+          },
+          {
+            "leftId": "l3",
+            "rightId": "r3"
+          }
+        ],
+        "matchingLeft": [
+          {
+            "id": "l1",
+            "text": "BY (Attribution)"
+          },
+          {
+            "id": "l2",
+            "text": "NC (NonCommercial)"
+          },
+          {
+            "id": "l3",
+            "text": "ND (NoDerivatives)"
+          }
+        ],
+        "matchingRight": [
+          {
+            "id": "r1",
+            "text": "Không sử dụng cho mục đích thương mại"
+          },
+          {
+            "id": "r2",
+            "text": "Phải ghi rõ tên tác giả khi sử dụng"
+          },
+          {
+            "id": "r3",
+            "text": "Không được chỉnh sửa, cắt ghép tác phẩm gốc"
+          }
+        ]
+      },
+      "explanation": "BY: ghi công tác giả; NC: phi thương mại; ND: không tạo tác phẩm phái sinh.",
+      "tips": "Nhớ theo chữ cái đầu tiếng Anh: NonCommercial = Phi thương mại.",
+      "createdAt": "2026-11-19T02:14:53.685717+00:00",
+      "updatedAt": "2026-11-19T02:18:28.477569+00:00"
+    }
+  ],
+  "questionSets": [
+    {
+      "id": "set_sb_tong_hop_01",
+      "title": "Bộ đề Khởi động IC3 (6 câu mẫu)",
+      "description": "Bộ đề kiểm tra nhanh 3 cấp độ LV1, LV2, LV3 từ dữ liệu Supabase.",
+      "level": "LV1",
+      "category": "GM",
+      "contentCode": "Tổng hợp",
+      "questionIds": [
+        "q_sb_lv1_gm2_01",
+        "q_sb_lv2_ot1_01",
+        "q_sb_lv2_gm1_01",
+        "q_sb_lv3_gm1_01"
+      ],
+      "createdAt": "2026-11-19T05:59:08.819476+00:00",
+      "updatedAt": "2026-11-20T11:17:54.869Z"
+    },
+    {
+      "id": "set_sb_lv1_gm1",
+      "title": "LV1 · GM1 — Đề luyện Phần cứng (Câu 1–2)",
+      "description": "Bộ đề trích từ GM1 theo khoảng câu hỏi trên Supabase.",
+      "level": "LV1",
+      "category": "GM",
+      "contentCode": "GM1",
+      "questionIds": [],
+      "createdAt": "2026-11-19T05:41:47.738139+00:00",
+      "updatedAt": "2026-11-20T11:17:54.869Z"
+    },
+    {
+      "id": "set_sb_lv1_gm3",
+      "title": "LV1 · GM3 — Bảo mật & Sao lưu (Câu 1–2)",
+      "description": "Bộ đề tạo từ Supabase cho phần GM3.",
+      "level": "LV1",
+      "category": "GM",
+      "contentCode": "GM3",
+      "questionIds": [
+        "q_sb_lv1_gm3_01",
+        "q_sb_lv1_gm3_02"
+      ],
+      "createdAt": "2026-11-19T02:18:02.849156+00:00",
+      "updatedAt": "2026-11-19T02:18:12.600123+00:00"
+    }
+  ],
+  "classTaskConfigs": [
+    {
+      "classId": "class_nd_6a1",
+      "assignmentTitle": "Nhiệm vụ Tuần 12 — Ôn tập Phần cứng & Word Ribbon",
+      "teacherName": "Cô Trần Thanh Hà",
+      "breakRewardMinutes": 15,
+      "updatedAt": "2026-11-21T13:35:22.702Z",
+      "tasks": [
+        {
+          "id": "task_6a1_1",
+          "classId": "class_nd_6a1",
+          "orderIndex": 1,
+          "title": "Luyện tập Máy tính căn bản (GM1)",
+          "description": "Hoàn thành 2 lượt đạt từ 700 điểm trở lên để nắm chắc phần cứng.",
+          "level": "LV1",
+          "category": "GM",
+          "contentCode": "GM1",
+          "moduleFilter": "computing_fundamentals",
+          "quizMode": "practice",
+          "questionIds": [
+            "q_cf_single_01",
+            "q_cf_multi_01",
+            "q_cf_tf_01",
+            "q_cf_match_01",
+            "q_cf_hotspot_01"
+          ],
+          "estimatedMinutes": 10,
+          "requiredAttempts": 2,
+          "minScore": 700
+        },
+        {
+          "id": "task_6a1_2",
+          "classId": "class_nd_6a1",
+          "orderIndex": 2,
+          "title": "Thi thử Ứng dụng chủ chốt (Word & Excel)",
+          "description": "Làm bài chế độ thi thử không gợi ý, đạt tối thiểu 750 điểm.",
+          "level": "LV2",
+          "category": "GM",
+          "contentCode": "GM2",
+          "moduleFilter": "key_applications",
+          "quizMode": "exam",
+          "questionIds": [
+            "q_ka_hotspot_word",
+            "q_ka_hotspot_excel",
+            "q_ka_single_01",
+            "q_ka_tf_01"
+          ],
+          "estimatedMinutes": 12,
+          "requiredAttempts": 1,
+          "minScore": 750
+        }
+      ]
+    },
+    {
+      "classId": "class_nd_6a2",
+      "assignmentTitle": "Nhiệm vụ Tuần 12 — Khởi động LV1",
+      "teacherName": "Cô Trần Thanh Hà",
+      "breakRewardMinutes": 10,
+      "updatedAt": "2026-11-15T08:00:00.000Z",
+      "tasks": [
+        {
+          "id": "task_6a2_1",
+          "classId": "class_nd_6a2",
+          "orderIndex": 1,
+          "title": "Nhận diện cổng kết nối & Bộ nhớ",
+          "description": "Làm quen dạng câu hỏi Hotspot và Ghép nối.",
+          "level": "LV1",
+          "category": "GM",
+          "contentCode": "GM1",
+          "moduleFilter": "computing_fundamentals",
+          "quizMode": "practice",
+          "questionIds": [
+            "q_cf_single_01",
+            "q_cf_match_01",
+            "q_cf_hotspot_01"
+          ],
+          "estimatedMinutes": 8,
+          "requiredAttempts": 1,
+          "minScore": 700
+        }
+      ]
+    }
+  ],
+  "submissions": [
+    {
+      "id": "sub_01",
+      "studentId": "st_6a1_01",
+      "studentName": "Đỗ Gia Huy",
+      "studentCode": "6A1-01",
+      "schoolId": "school_nd",
+      "classId": "class_nd_6a1",
+      "taskId": "task_6a1_1",
+      "taskTitle": "Luyện tập Máy tính căn bản (GM1)",
+      "score": 600,
+      "correctCount": 3,
+      "totalCount": 5,
+      "durationSeconds": 184,
+      "completedAt": "2026-11-14T09:15:00.000Z",
+      "attemptNumber": 1,
+      "requiredAttempts": 2,
+      "minScore": 700,
+      "metMinScore": false
+    },
+    {
+      "id": "sub_02",
+      "studentId": "st_6a1_01",
+      "studentName": "Đỗ Gia Huy",
+      "studentCode": "6A1-01",
+      "schoolId": "school_nd",
+      "classId": "class_nd_6a1",
+      "taskId": "task_6a1_1",
+      "taskTitle": "Luyện tập Máy tính căn bản (GM1)",
+      "score": 800,
+      "correctCount": 4,
+      "totalCount": 5,
+      "durationSeconds": 142,
+      "completedAt": "2026-11-14T09:24:00.000Z",
+      "attemptNumber": 2,
+      "requiredAttempts": 2,
+      "minScore": 700,
+      "metMinScore": true
+    },
+    {
+      "id": "sub_03",
+      "studentId": "st_6a1_01",
+      "studentName": "Đỗ Gia Huy",
+      "studentCode": "6A1-01",
+      "schoolId": "school_nd",
+      "classId": "class_nd_6a1",
+      "taskId": "task_6a1_1",
+      "taskTitle": "Luyện tập Máy tính căn bản (GM1)",
+      "score": 1000,
+      "correctCount": 5,
+      "totalCount": 5,
+      "durationSeconds": 118,
+      "completedAt": "2026-11-14T09:31:00.000Z",
+      "attemptNumber": 3,
+      "requiredAttempts": 2,
+      "minScore": 700,
+      "metMinScore": true
+    },
+    {
+      "id": "sub_04",
+      "studentId": "st_6a1_01",
+      "studentName": "Đỗ Gia Huy",
+      "studentCode": "6A1-01",
+      "schoolId": "school_nd",
+      "classId": "class_nd_6a1",
+      "taskId": "task_6a1_2",
+      "taskTitle": "Thi thử Ứng dụng chủ chốt (Word & Excel)",
+      "score": 750,
+      "correctCount": 3,
+      "totalCount": 4,
+      "durationSeconds": 215,
+      "completedAt": "2026-11-14T10:05:00.000Z",
+      "attemptNumber": 1,
+      "requiredAttempts": 1,
+      "minScore": 750,
+      "metMinScore": true
+    },
+    {
+      "id": "sub_05",
+      "studentId": "st_6a1_02",
+      "studentName": "Nguyễn Văn An",
+      "studentCode": "6A1-02",
+      "schoolId": "school_nd",
+      "classId": "class_nd_6a1",
+      "taskId": "task_6a1_1",
+      "taskTitle": "Luyện tập Máy tính căn bản (GM1)",
+      "score": 800,
+      "correctCount": 4,
+      "totalCount": 5,
+      "durationSeconds": 165,
+      "completedAt": "2026-11-14T14:10:00.000Z",
+      "attemptNumber": 1,
+      "requiredAttempts": 2,
+      "minScore": 700,
+      "metMinScore": true
+    },
+    {
+      "id": "sub_06",
+      "studentId": "st_6a1_03",
+      "studentName": "Trần Minh Thư",
+      "studentCode": "6A1-03",
+      "schoolId": "school_nd",
+      "classId": "class_nd_6a1",
+      "taskId": "task_6a1_1",
+      "taskTitle": "Luyện tập Máy tính căn bản (GM1)",
+      "score": 1000,
+      "correctCount": 5,
+      "totalCount": 5,
+      "durationSeconds": 98,
+      "completedAt": "2026-11-14T15:02:00.000Z",
+      "attemptNumber": 1,
+      "requiredAttempts": 2,
+      "minScore": 700,
+      "metMinScore": true
+    },
+    {
+      "id": "sub_07",
+      "studentId": "st_6a2_01",
+      "studentName": "Võ Quốc Khánh",
+      "studentCode": "6A2-01",
+      "schoolId": "school_nd",
+      "classId": "class_nd_6a2",
+      "taskId": "task_6a2_1",
+      "taskTitle": "Nhận diện cổng kết nối & Bộ nhớ",
+      "score": 667,
+      "correctCount": 2,
+      "totalCount": 3,
+      "durationSeconds": 150,
+      "completedAt": "2026-11-14T16:20:00.000Z",
+      "attemptNumber": 1,
+      "requiredAttempts": 1,
+      "minScore": 700,
+      "metMinScore": false
+    }
+  ],
+  "breakStates": [
+    {
+      "studentId": "st_6a1_01",
+      "status": "active",
+      "totalGrantedSeconds": 900,
+      "remainingSeconds": 640,
+      "unlockedAt": "2026-11-14T10:05:00.000Z",
+      "updatedAt": "2026-11-15T08:00:00.000Z"
+    },
+    {
+      "studentId": "st_6a1_02",
+      "status": "locked",
+      "totalGrantedSeconds": 0,
+      "remainingSeconds": 0,
+      "updatedAt": "2026-11-15T08:00:00.000Z"
+    },
+    {
+      "studentId": "st_6a1_demo",
+      "status": "active",
+      "totalGrantedSeconds": 3600,
+      "remainingSeconds": 3600,
+      "unlockedAt": "2026-11-15T08:00:00.000Z",
+      "updatedAt": "2026-11-15T08:00:00.000Z"
+    }
+  ],
+  "battleConfigs": [
+    {
+      "classId": "class_nd_6a1",
+      "isEnabled": true,
+      "title": "Đấu trường Tốc độ IC3 — Lớp 6A1",
+      "questionSetId": "set_battle_all",
+      "questionSetName": "Bộ đề Thi đấu Tổng hợp IC3 (10 câu)",
+      "teacherName": "Cô Trần Thanh Hà",
+      "moduleFilter": "all",
+      "questionIds": [
+        "q_cf_single_01",
+        "q_cf_multi_01",
+        "q_cf_tf_01",
+        "q_cf_match_01",
+        "q_cf_hotspot_01",
+        "q_ka_hotspot_word",
+        "q_ka_hotspot_excel",
+        "q_ka_single_01",
+        "q_lo_hotspot_browser",
+        "q_lo_single_01"
+      ],
+      "fastComboWindowSeconds": 15,
+      "topRewardCount": 3,
+      "breakRewardMinutes": 10,
+      "timeLimitSeconds": 300,
+      "updatedAt": "2026-11-15T08:00:00.000Z"
+    },
+    {
+      "classId": "class_nd_6a2",
+      "isEnabled": false,
+      "title": "Đấu trường IC3 — Lớp 6A2",
+      "questionSetId": "set_lv1_gm1",
+      "questionSetName": "LV1 — GMetrix Nền tảng Phần cứng & Hệ điều hành",
+      "teacherName": "Cô Trần Thanh Hà",
+      "moduleFilter": "computing_fundamentals",
+      "questionIds": [
+        "q_cf_single_01",
+        "q_cf_multi_01",
+        "q_cf_tf_01",
+        "q_cf_match_01",
+        "q_cf_hotspot_01"
+      ],
+      "fastComboWindowSeconds": 20,
+      "topRewardCount": 3,
+      "breakRewardMinutes": 10,
+      "timeLimitSeconds": 240,
+      "updatedAt": "2026-11-15T08:00:00.000Z"
+    }
+  ],
+  "battleRooms": [
+    {
+      "id": "room_6a1_live",
+      "classId": "class_nd_6a1",
+      "status": "lobby",
+      "questionIds": [
+        "q_cf_single_01",
+        "q_cf_multi_01",
+        "q_cf_tf_01",
+        "q_cf_match_01",
+        "q_cf_hotspot_01",
+        "q_ka_hotspot_word",
+        "q_ka_hotspot_excel",
+        "q_ka_single_01",
+        "q_lo_hotspot_browser",
+        "q_lo_single_01"
+      ],
+      "configSnapshot": {
+        "classId": "class_nd_6a1",
+        "isEnabled": true,
+        "title": "Đấu trường Tốc độ IC3 — Lớp 6A1",
+        "questionSetId": "set_battle_all",
+        "questionSetName": "Bộ đề Thi đấu Tổng hợp IC3 (10 câu)",
+        "teacherName": "Cô Trần Thanh Hà",
+        "moduleFilter": "all",
+        "questionIds": [
+          "q_cf_single_01",
+          "q_cf_multi_01",
+          "q_cf_tf_01",
+          "q_cf_match_01",
+          "q_cf_hotspot_01",
+          "q_ka_hotspot_word",
+          "q_ka_hotspot_excel",
+          "q_ka_single_01",
+          "q_lo_hotspot_browser",
+          "q_lo_single_01"
+        ],
+        "fastComboWindowSeconds": 15,
+        "topRewardCount": 3,
+        "breakRewardMinutes": 10,
+        "timeLimitSeconds": 300,
+        "updatedAt": "2026-11-15T08:00:00.000Z"
+      },
+      "participants": [
+        {
+          "roomId": "room_6a1_live",
+          "studentId": "st_6a1_01",
+          "studentName": "Đỗ Gia Huy",
+          "studentCode": "6A1-01",
+          "connected": true,
+          "answeredCount": 0,
+          "correctCount": 0,
+          "score": 0,
+          "durationSeconds": 0,
+          "finished": false,
+          "shieldCharges": 0,
+          "pendingCardChoices": 0,
+          "attacksUsed": 0,
+          "defensesUsed": 0,
+          "attacksBlocked": 0,
+          "activeDebuffs": [],
+          "currentPairCount": 0,
+          "currentPairElapsedSeconds": 0,
+          "joinedAt": "2026-11-15T07:55:00.000Z"
+        },
+        {
+          "roomId": "room_6a1_live",
+          "studentId": "st_6a1_02",
+          "studentName": "Nguyễn Văn An",
+          "studentCode": "6A1-02",
+          "connected": true,
+          "answeredCount": 0,
+          "correctCount": 0,
+          "score": 0,
+          "durationSeconds": 0,
+          "finished": false,
+          "shieldCharges": 0,
+          "pendingCardChoices": 0,
+          "attacksUsed": 0,
+          "defensesUsed": 0,
+          "attacksBlocked": 0,
+          "activeDebuffs": [],
+          "currentPairCount": 0,
+          "currentPairElapsedSeconds": 0,
+          "joinedAt": "2026-11-15T07:56:00.000Z"
+        },
+        {
+          "roomId": "room_6a1_live",
+          "studentId": "st_6a1_03",
+          "studentName": "Trần Minh Thư",
+          "studentCode": "6A1-03",
+          "connected": true,
+          "answeredCount": 0,
+          "correctCount": 0,
+          "score": 0,
+          "durationSeconds": 0,
+          "finished": false,
+          "shieldCharges": 0,
+          "pendingCardChoices": 0,
+          "attacksUsed": 0,
+          "defensesUsed": 0,
+          "attacksBlocked": 0,
+          "activeDebuffs": [],
+          "currentPairCount": 0,
+          "currentPairElapsedSeconds": 0,
+          "joinedAt": "2026-11-15T07:57:00.000Z"
+        },
+        {
+          "roomId": "room_6a1_live",
+          "studentId": "st_6a1_04",
+          "studentName": "Lê Hoàng Phúc",
+          "studentCode": "6A1-04",
+          "connected": true,
+          "answeredCount": 0,
+          "correctCount": 0,
+          "score": 0,
+          "durationSeconds": 0,
+          "finished": false,
+          "shieldCharges": 0,
+          "pendingCardChoices": 0,
+          "attacksUsed": 0,
+          "defensesUsed": 0,
+          "attacksBlocked": 0,
+          "activeDebuffs": [],
+          "currentPairCount": 0,
+          "currentPairElapsedSeconds": 0,
+          "joinedAt": "2026-11-15T07:58:00.000Z"
+        }
+      ],
+      "events": [
+        {
+          "id": "ev_1",
+          "roomId": "room_6a1_live",
+          "type": "join",
+          "message": "Đỗ Gia Huy (6A1-01) đã vào phòng chờ thi đấu.",
+          "actorStudentId": "st_6a1_01",
+          "actorStudentName": "Đỗ Gia Huy",
+          "createdAt": "2026-11-15T07:55:00.000Z"
+        },
+        {
+          "id": "ev_2",
+          "roomId": "room_6a1_live",
+          "type": "join",
+          "message": "Nguyễn Văn An (6A1-02) đã vào phòng chờ thi đấu.",
+          "actorStudentId": "st_6a1_02",
+          "actorStudentName": "Nguyễn Văn An",
+          "createdAt": "2026-11-15T07:56:00.000Z"
+        },
+        {
+          "id": "ev_3",
+          "roomId": "room_6a1_live",
+          "type": "join",
+          "message": "Trần Minh Thư (6A1-03) đã vào phòng chờ thi đấu.",
+          "actorStudentId": "st_6a1_03",
+          "actorStudentName": "Trần Minh Thư",
+          "createdAt": "2026-11-15T07:57:00.000Z"
+        },
+        {
+          "id": "ev_4",
+          "roomId": "room_6a1_live",
+          "type": "join",
+          "message": "Lê Hoàng Phúc (6A1-04) đã vào phòng chờ thi đấu.",
+          "actorStudentId": "st_6a1_04",
+          "actorStudentName": "Lê Hoàng Phúc",
+          "createdAt": "2026-11-15T07:58:00.000Z"
+        }
+      ],
+      "createdAt": "2026-11-15T07:54:00.000Z"
+    },
+    {
+      "id": "room_6a1_history_01",
+      "classId": "class_nd_6a1",
+      "status": "finished",
+      "questionIds": [
+        "q_cf_single_01",
+        "q_cf_multi_01",
+        "q_cf_tf_01",
+        "q_cf_match_01",
+        "q_cf_hotspot_01"
+      ],
+      "configSnapshot": {
+        "classId": "class_nd_6a1",
+        "isEnabled": true,
+        "title": "Giải đấu Khởi động LV1 — Tuần 11",
+        "questionSetId": "set_lv1_gm1",
+        "questionSetName": "LV1 — GMetrix Nền tảng Phần cứng & Hệ điều hành",
+        "teacherName": "Cô Trần Thanh Hà",
+        "moduleFilter": "computing_fundamentals",
+        "questionIds": [
+          "q_cf_single_01",
+          "q_cf_multi_01",
+          "q_cf_tf_01",
+          "q_cf_match_01",
+          "q_cf_hotspot_01"
+        ],
+        "fastComboWindowSeconds": 15,
+        "topRewardCount": 2,
+        "breakRewardMinutes": 10,
+        "timeLimitSeconds": 180,
+        "updatedAt": "2026-11-08T09:00:00.000Z"
+      },
+      "startedAt": "2026-11-08T09:00:00.000Z",
+      "finishedAt": "2026-11-08T09:03:00.000Z",
+      "rankedResults": [
+        {
+          "rank": 1,
+          "studentId": "st_6a1_03",
+          "studentName": "Trần Minh Thư",
+          "studentCode": "6A1-03",
+          "score": 1000,
+          "correctCount": 5,
+          "totalQuestions": 5,
+          "durationSeconds": 78,
+          "rewardedBreakMinutes": 10
+        },
+        {
+          "rank": 2,
+          "studentId": "st_6a1_01",
+          "studentName": "Đỗ Gia Huy",
+          "studentCode": "6A1-01",
+          "score": 800,
+          "correctCount": 4,
+          "totalQuestions": 5,
+          "durationSeconds": 92,
+          "rewardedBreakMinutes": 10
+        },
+        {
+          "rank": 3,
+          "studentId": "st_6a1_02",
+          "studentName": "Nguyễn Văn An",
+          "studentCode": "6A1-02",
+          "score": 800,
+          "correctCount": 4,
+          "totalQuestions": 5,
+          "durationSeconds": 114,
+          "rewardedBreakMinutes": 0
+        }
+      ],
+      "participants": [],
+      "events": [
+        {
+          "id": "ev_hist_1",
+          "roomId": "room_6a1_history_01",
+          "type": "finish",
+          "message": "Trận đấu kết thúc. Trần Minh Thư giành hạng 1 với 1000 điểm (78s).",
+          "createdAt": "2026-11-08T09:03:00.000Z"
+        }
+      ],
+      "createdAt": "2026-11-08T08:55:00.000Z"
+    }
+  ]
+}

@@ -7,7 +7,6 @@ import {
   CATEGORY_LABELS,
   MODULE_LABELS,
   type AdminDatabase,
-  type DifficultyLevel,
   type IC3Level,
   type IC3Module,
   type IC3ModuleRecord,
@@ -717,7 +716,6 @@ export async function fetchQuestionBankFromSupabase(
         type: (row.type as QuestionType) || 'single',
         prompt: String(row.prompt || ''),
         instruction: row.instruction ? String(row.instruction) : undefined,
-        difficulty: (row.difficulty as DifficultyLevel) || 'medium',
         payload: parsedPayload,
         explanation: String(row.explanation || ''),
         tips: row.tips ? String(row.tips) : undefined,
@@ -1157,7 +1155,6 @@ async function upsertQuestionRaw(
       type: q.type,
       prompt: q.prompt,
       instruction: q.instruction ?? null,
-      difficulty: q.difficulty,
       payload: q.payload,
       explanation: q.explanation,
       tips: q.tips ?? null,
@@ -1507,3 +1504,79 @@ export async function deleteQuestionSetOnSupabase(
     if (error) throw new Error(`Supabase question_sets: ${error.message}`);
   });
 }
+
+export const HOTSPOT_STORAGE_BUCKET = 'hotspot-images';
+
+export async function uploadHotspotImageToSupabase(
+  file: File,
+  settings: SupabaseSettings = getSavedSupabaseSettings()
+): Promise<{ ok: boolean; url?: string; message?: string }> {
+  const client = createBrowserSupabaseClient(settings);
+  if (!client) {
+    return { ok: false, message: 'Chưa cấu hình kết nối Supabase.' };
+  }
+  return trackSupabaseCall(
+    'Đang tải ảnh câu hỏi Hotspot lên Supabase Storage...',
+    async () => {
+      const extMatch = (file.name || '').match(/\.([a-zA-Z0-9]+)$/);
+      const mimeExt = file.type?.split('/')[1]?.split('+')[0]?.toLowerCase();
+      const normalizedMimeExt = mimeExt === 'jpeg' ? 'jpg' : mimeExt;
+      const ext = extMatch ? extMatch[1].toLowerCase() : normalizedMimeExt || 'png';
+      const filePath = `questions/${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}.${ext}`;
+
+      const { error } = await client.storage
+        .from(HOTSPOT_STORAGE_BUCKET)
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: file.type || 'image/png',
+        });
+
+      if (error) {
+        return { ok: false, message: error.message };
+      }
+
+      const { data } = client.storage
+        .from(HOTSPOT_STORAGE_BUCKET)
+        .getPublicUrl(filePath);
+
+      return { ok: true, url: data.publicUrl };
+    }
+  );
+}
+
+export async function deleteHotspotImagesFromSupabase(
+  storagePaths: string[],
+  settings: SupabaseSettings = getSavedSupabaseSettings()
+): Promise<{ ok: boolean; deletedCount: number; message?: string }> {
+  const uniquePaths = Array.from(
+    new Set(storagePaths.map((p) => p.trim()).filter(Boolean))
+  );
+  if (uniquePaths.length === 0) {
+    return { ok: true, deletedCount: 0 };
+  }
+  const client = createBrowserSupabaseClient(settings);
+  if (!client) {
+    return { ok: false, deletedCount: 0, message: 'Chưa cấu hình kết nối Supabase.' };
+  }
+  return trackSupabaseCall(
+    uniquePaths.length === 1
+      ? 'Đang xóa ảnh Hotspot cũ khỏi Supabase Storage...'
+      : `Đang xóa ${uniquePaths.length} ảnh Hotspot khỏi Supabase Storage...`,
+    async () => {
+      const { error } = await client.storage
+        .from(HOTSPOT_STORAGE_BUCKET)
+        .remove(uniquePaths);
+
+      if (error) {
+        return { ok: false, deletedCount: 0, message: error.message };
+      }
+
+      return { ok: true, deletedCount: uniquePaths.length };
+    }
+  );
+}
+
+

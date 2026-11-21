@@ -1,14 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildHotspotTargetFromPoints,
   buildQuestionBankSupabasePayload,
   buildReorderedPartUpdates,
   calculateIC3Score,
+  collectHotspotStoragePathsToDelete,
   evaluateTaskCompletion,
+  extractHotspotStoragePathFromUrl,
+  extractImageFileFromClipboardData,
   formatQuestionOrderSummary,
   formatSubmissionsToCsv,
   formatSupabaseLoadingStatus,
+  getDefaultInstructionForQuestionType,
+  getHotspotTargetCenter,
   getNextTopicOrder,
+  getObsoleteHotspotStoragePath,
   getPartQuestionsSorted,
   gradeQuestion,
   isPassingIC3Score,
@@ -17,6 +24,8 @@ import {
   parseStudentsCsv,
   pickQuestionsBySelectedIds,
   rankBattleParticipants,
+  resolveToastVariant,
+  shouldUploadHotspotFileOnSave,
   sliceQuestionsByOrderRange,
   toggleSelectAllVisibleIds,
   validateStudentPassword,
@@ -60,7 +69,6 @@ test('gradeQuestion correctly evaluates all 5 IC3 question types', () => {
     topicOrder: 1,
     topic: 'Test',
     prompt: 'Prompt',
-    difficulty: 'medium' as const,
     explanation: '',
     createdAt: '',
     updatedAt: '',
@@ -318,7 +326,6 @@ test('part question ordering, range slicing, and reordering work accurately', ()
     topic: 'Test',
     type: 'single',
     prompt: `Prompt ${id}`,
-    difficulty: 'easy',
     payload: {
       options: [
         { id: 'a', text: 'A' },
@@ -397,7 +404,6 @@ test('buildQuestionBankSupabasePayload synthesizes missing FK parents and normal
         topic: 'Prompt AI',
         type: 'single',
         prompt: 'What is a prompt?',
-        difficulty: 'easy',
         payload: {
           options: [
             { id: 'a', text: 'Câu lệnh hướng dẫn AI' },
@@ -454,7 +460,6 @@ test('multi-select helpers select all visible, pick non-contiguous in order, and
     topic: 'Test',
     type: 'single',
     prompt: `Q${topicOrder}`,
-    difficulty: 'easy',
     payload: {
       options: [
         { id: 'a', text: 'A' },
@@ -509,4 +514,299 @@ test('formatSupabaseLoadingStatus formats empty, single, and concurrent Supabase
     'Đang đồng bộ Câu hỏi lên Supabase... (2 tác vụ đang chờ Supabase...)'
   );
 });
+
+test('getDefaultInstructionForQuestionType returns expected instruction for all 5 question types and payload omits difficulty', () => {
+  assert.equal(getDefaultInstructionForQuestionType('single'), 'Chọn một đáp án đúng nhất.');
+  assert.equal(getDefaultInstructionForQuestionType('multiple'), 'Chọn TẤT CẢ đáp án đúng.');
+  assert.equal(getDefaultInstructionForQuestionType('true_false'), 'Chọn Đúng hoặc Sai cho từng ý.');
+  assert.equal(
+    getDefaultInstructionForQuestionType('matching'),
+    'Chọn cặp tương ứng giữa Cột A và Cột B.'
+  );
+  assert.equal(
+    getDefaultInstructionForQuestionType('hotspot'),
+    'Nhấp chuột trực tiếp vào vùng tương ứng trên hình.'
+  );
+
+  const payload = buildQuestionBankSupabasePayload({
+    modules: [],
+    knowledgeCategories: [],
+    knowledgeParts: [],
+    questions: [
+      {
+        id: 'q_default_inst',
+        module: 'computing_fundamentals',
+        level: 'LV1',
+        category: 'GM',
+        contentCode: 'GM1',
+        topicOrder: 1,
+        topic: 'Phần cứng',
+        type: 'multiple',
+        prompt: 'Chọn đáp án đúng',
+        payload: {
+          options: [
+            { id: 'a', text: 'A' },
+            { id: 'b', text: 'B' },
+          ],
+          correctOptionIds: ['a'],
+        },
+        explanation: '',
+        createdAt: '2026-11-20T00:00:00Z',
+        updatedAt: '2026-11-20T00:00:00Z',
+      },
+    ],
+    questionSets: [],
+  });
+
+  assert.equal(payload.questions[0].instruction, 'Chọn TẤT CẢ đáp án đúng.');
+  assert.equal('difficulty' in payload.questions[0], false);
+});
+
+test('hotspot helpers compute click box, drag region, center point, and grade uploaded image payloads', () => {
+  const clicked = buildHotspotTargetFromPoints(
+    { x: 50, y: 40 },
+    { x: 50.4, y: 40.4 },
+    'Nút Save'
+  );
+  assert.deepEqual(clicked, {
+    label: 'Nút Save',
+    minX: 46.2,
+    maxX: 54.2,
+    minY: 34.2,
+    maxY: 46.2,
+  });
+  assert.deepEqual(getHotspotTargetCenter(clicked), { x: 50.2, y: 40.2 });
+
+  const dragged = buildHotspotTargetFromPoints(
+    { x: 30, y: 20 },
+    { x: 10, y: 50 },
+    ''
+  );
+  assert.deepEqual(dragged, {
+    label: 'Điểm đáp án đúng',
+    minX: 10,
+    minY: 20,
+    maxX: 30,
+    maxY: 50,
+  });
+
+  const uploadedHotspotQ: Question = {
+    id: 'q_hs_upload',
+    module: 'computing_fundamentals',
+    level: 'LV1',
+    category: 'GM',
+    contentCode: 'GM1',
+    topicOrder: 1,
+    topic: 'Test',
+    type: 'hotspot',
+    prompt: 'Nhấp vào nút Lưu trên ảnh',
+    payload: {
+      imageUrl: 'https://example.supabase.co/storage/v1/object/public/hotspot-images/q1.png',
+      imageAlt: 'Ảnh chụp màn hình Word',
+      hotspotTarget: clicked,
+    },
+    explanation: '',
+    createdAt: '',
+    updatedAt: '',
+  };
+  assert.equal(gradeQuestion(uploadedHotspotQ, { x: 50, y: 40 }), true);
+  assert.equal(gradeQuestion(uploadedHotspotQ, { x: 10, y: 10 }), false);
+});
+
+test('extractImageFileFromClipboardData supports items, files fallback, and ignores non-image text', () => {
+  const pastedImg = new File([new Uint8Array([137, 80, 78, 71])], 'screenshot.png', {
+    type: 'image/png',
+  });
+  const fromItems = extractImageFileFromClipboardData({
+    items: [
+      { kind: 'string', type: 'text/plain', getAsFile: () => null },
+      { kind: 'file', type: 'image/png', getAsFile: () => pastedImg },
+    ],
+    files: [],
+  });
+  assert.equal(fromItems, pastedImg);
+
+  const fallbackImg = new File([new Uint8Array([1, 2, 3])], 'clip.webp', {
+    type: 'image/webp',
+  });
+  const fromFiles = extractImageFileFromClipboardData({
+    items: [],
+    files: [fallbackImg],
+  });
+  assert.equal(fromFiles, fallbackImg);
+
+  const textOnly = extractImageFileFromClipboardData({
+    items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }],
+    files: [],
+  });
+  assert.equal(textOnly, null);
+  assert.equal(extractImageFileFromClipboardData(null), null);
+});
+
+test('shouldUploadHotspotFileOnSave only allows Storage upload on valid hotspot save', () => {
+  assert.equal(
+    shouldUploadHotspotFileOnSave({
+      questionType: 'hotspot',
+      hasPendingFile: true,
+      supabaseConfigured: true,
+      promptValid: true,
+      hotspotImageReady: true,
+      hotspotTargetReady: true,
+    }),
+    true
+  );
+
+  // Missing target point or missing prompt must NOT upload to Storage
+  assert.equal(
+    shouldUploadHotspotFileOnSave({
+      questionType: 'hotspot',
+      hasPendingFile: true,
+      supabaseConfigured: true,
+      promptValid: true,
+      hotspotImageReady: true,
+      hotspotTargetReady: false,
+    }),
+    false
+  );
+  assert.equal(
+    shouldUploadHotspotFileOnSave({
+      questionType: 'hotspot',
+      hasPendingFile: true,
+      supabaseConfigured: true,
+      promptValid: false,
+      hotspotImageReady: true,
+      hotspotTargetReady: true,
+    }),
+    false
+  );
+
+  // Editing existing question without selecting/pasting new file must NOT re-upload
+  assert.equal(
+    shouldUploadHotspotFileOnSave({
+      questionType: 'hotspot',
+      hasPendingFile: false,
+      supabaseConfigured: true,
+      promptValid: true,
+      hotspotImageReady: true,
+      hotspotTargetReady: true,
+    }),
+    false
+  );
+});
+
+test('Hotspot Storage path extraction and obsolete cleanup on edit/delete work accurately', () => {
+  const oldUrl =
+    'https://abcxyz.supabase.co/storage/v1/object/public/hotspot-images/questions/111_old.png';
+  const newUrl =
+    'https://abcxyz.supabase.co/storage/v1/object/public/hotspot-images/questions/222_new.webp?t=123';
+
+  assert.equal(
+    extractHotspotStoragePathFromUrl(oldUrl),
+    'questions/111_old.png'
+  );
+  assert.equal(
+    extractHotspotStoragePathFromUrl(newUrl),
+    'questions/222_new.webp'
+  );
+  assert.equal(
+    extractHotspotStoragePathFromUrl('data:image/webp;base64,AAA'),
+    null
+  );
+  assert.equal(
+    extractHotspotStoragePathFromUrl('blob:http://localhost:3000/123'),
+    null
+  );
+
+  // Replacing with another image returns the old path for deletion
+  assert.equal(
+    getObsoleteHotspotStoragePath(oldUrl, newUrl),
+    'questions/111_old.png'
+  );
+  // Keeping the same image returns null
+  assert.equal(getObsoleteHotspotStoragePath(oldUrl, oldUrl), null);
+  // Changing question type (newImageUrl = undefined) also deletes old image
+  assert.equal(
+    getObsoleteHotspotStoragePath(oldUrl, undefined),
+    'questions/111_old.png'
+  );
+
+  const q1: Question = {
+    id: 'q1',
+    module: 'computing_fundamentals',
+    level: 'LV1',
+    category: 'GM',
+    contentCode: 'GM1',
+    topicOrder: 1,
+    topic: 'Test',
+    type: 'hotspot',
+    prompt: 'Q1',
+    payload: {
+      imageUrl: oldUrl,
+      imageAlt: 'Ảnh cũ',
+      hotspotTarget: { label: 'A', minX: 10, minY: 10, maxX: 20, maxY: 20 },
+    },
+    explanation: '',
+    createdAt: '',
+    updatedAt: '',
+  };
+  const q2: Question = {
+    ...q1,
+    id: 'q2',
+    payload: {
+      imageUrl: newUrl,
+      imageAlt: 'Ảnh mới',
+      hotspotTarget: { label: 'B', minX: 10, minY: 10, maxX: 20, maxY: 20 },
+    },
+  };
+  const q3SameAsQ1: Question = {
+    ...q1,
+    id: 'q3',
+  };
+
+  // Batch deleting q1 & q2 deletes both paths when no remaining question uses them
+  assert.deepEqual(collectHotspotStoragePathsToDelete([q1, q2], []), [
+    'questions/111_old.png',
+    'questions/222_new.webp',
+  ]);
+  // If another remaining question still references oldUrl, keep oldUrl
+  assert.deepEqual(
+    collectHotspotStoragePathsToDelete([q1, q2], [q3SameAsQ1]),
+    ['questions/222_new.webp']
+  );
+});
+
+test('resolveToastVariant classifies success, warning, error, and info accurately', () => {
+  assert.equal(
+    resolveToastVariant('Đã thêm câu hỏi mới vào phần kiến thức.', false),
+    'success'
+  );
+  assert.equal(
+    resolveToastVariant('Đã tạm tắt tự động đồng bộ Supabase cho Ngân hàng Câu hỏi.', false),
+    'info'
+  );
+  assert.equal(
+    resolveToastVariant('Đã sao chép kịch bản PostgreSQL DDL vào bộ nhớ tạm.', false),
+    'info'
+  );
+  assert.equal(
+    resolveToastVariant('Đã lưu cục bộ Câu 1, nhưng lỗi đồng bộ Supabase: timeout', true),
+    'warning'
+  );
+  assert.equal(
+    resolveToastVariant('Vui lòng chọn ít nhất 1 câu hỏi để tạo bộ đề.', true),
+    'warning'
+  );
+  assert.equal(
+    resolveToastVariant('Không thể kết nối máy chủ Supabase.', true),
+    'error'
+  );
+  assert.equal(resolveToastVariant('Thông báo tùy chỉnh', 'warning'), 'warning');
+  assert.equal(resolveToastVariant('Thông báo tùy chỉnh', 'info'), 'info');
+});
+
+
+
+
+
+
 

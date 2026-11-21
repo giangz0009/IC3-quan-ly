@@ -8,7 +8,6 @@ export type QuestionType =
   | 'true_false'
   | 'matching'
   | 'hotspot';
-export type DifficultyLevel = 'easy' | 'medium' | 'hard';
 export type QuizMode = 'practice' | 'exam';
 export type HotspotType =
   | 'word_ribbon'
@@ -105,7 +104,8 @@ export type QuestionPayload =
       correctPairs: MatchingPair[];
     }
   | {
-      hotspotType: HotspotType;
+      imageUrl?: string;
+      hotspotType?: HotspotType;
       hotspotTarget: HotspotTarget;
       imageAlt: string;
     };
@@ -150,7 +150,6 @@ export interface Question {
   type: QuestionType;
   prompt: string;
   instruction?: string;
-  difficulty: DifficultyLevel;
   payload: QuestionPayload;
   explanation: string;
   tips?: string;
@@ -357,10 +356,12 @@ export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
   hotspot: 'Chọn điểm trên hình (Hotspot)',
 };
 
-export const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
-  easy: 'Cơ bản',
-  medium: 'Trung bình',
-  hard: 'Nâng cao',
+export const QUESTION_DEFAULT_INSTRUCTIONS: Record<QuestionType, string> = {
+  single: 'Chọn một đáp án đúng nhất.',
+  multiple: 'Chọn TẤT CẢ đáp án đúng.',
+  true_false: 'Chọn Đúng hoặc Sai cho từng ý.',
+  matching: 'Chọn cặp tương ứng giữa Cột A và Cột B.',
+  hotspot: 'Nhấp chuột trực tiếp vào vùng tương ứng trên hình.',
 };
 
 export const HOTSPOT_TYPE_LABELS: Record<HotspotType, string> = {

@@ -19,11 +19,9 @@ import {
 } from 'lucide-react';
 import {
   CATEGORY_LABELS,
-  DIFFICULTY_LABELS,
   MODULE_LABELS,
   QUESTION_TYPE_LABELS,
   type AdminDatabase,
-  type DifficultyLevel,
   type IC3Level,
   type IC3Module,
   type IC3ModuleRecord,
@@ -37,14 +35,17 @@ import {
 import { api } from '../utils/api';
 import {
   buildReorderedPartUpdates,
+  collectHotspotStoragePathsToDelete,
   formatQuestionOrderSummary,
   getNextTopicOrder,
+  getObsoleteHotspotStoragePath,
   getPartQuestionsSorted,
   pickQuestionsBySelectedIds,
   sliceQuestionsByOrderRange,
   toggleSelectAllVisibleIds,
 } from '../utils/ic3Rules';
 import {
+  deleteHotspotImagesFromSupabase,
   deleteKnowledgeCategoryOnSupabase,
   deleteKnowledgePartOnSupabase,
   deleteModuleOnSupabase,
@@ -102,7 +103,6 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   // Step 4 filters
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | QuestionType>('all');
-  const [difficultyFilter, setDifficultyFilter] = useState<'all' | DifficultyLevel>('all');
 
   // Range-to-Set helper state
   const [rangeFrom, setRangeFrom] = useState<number>(1);
@@ -300,7 +300,6 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     const q = search.trim().toLowerCase();
     return partQuestionsSorted.filter((item) => {
       if (typeFilter !== 'all' && item.type !== typeFilter) return false;
-      if (difficultyFilter !== 'all' && item.difficulty !== difficultyFilter) return false;
       if (q) {
         const orderLabel = `câu ${item.topicOrder}`;
         const matchesText =
@@ -312,10 +311,9 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
       }
       return true;
     });
-  }, [partQuestionsSorted, search, typeFilter, difficultyFilter]);
+  }, [partQuestionsSorted, search, typeFilter]);
 
-  const hasActiveFilter =
-    search.trim() !== '' || typeFilter !== 'all' || difficultyFilter !== 'all';
+  const hasActiveFilter = search.trim() !== '' || typeFilter !== 'all';
 
   const visibleQuestionIds = useMemo(
     () => filteredPartQuestions.map((q) => q.id),
@@ -370,7 +368,6 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     setConfirmBatchDelete(false);
     setSearch('');
     setTypeFilter('all');
-    setDifficultyFilter('all');
   }
 
   function selectCategory(cat: KnowledgeCategory) {
@@ -383,7 +380,6 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     setConfirmBatchDelete(false);
     setSearch('');
     setTypeFilter('all');
-    setDifficultyFilter('all');
   }
 
   function selectPart(code: string) {
@@ -394,7 +390,6 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     setConfirmBatchDelete(false);
     setSearch('');
     setTypeFilter('all');
-    setDifficultyFilter('all');
     if (selectedModule && selectedCategory) {
       const sorted = getPartQuestionsSorted(
         db.questions,
@@ -414,7 +409,6 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
       setConfirmBatchDelete(false);
       setSearch('');
       setTypeFilter('all');
-      setDifficultyFilter('all');
       return;
     }
     if (selectedCategory) {
@@ -843,9 +837,20 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     payload: Omit<Question, 'id' | 'createdAt' | 'updatedAt'>,
     existingId?: string
   ) {
+    const prevQuestion = existingId
+      ? db.questions.find((item) => item.id === existingId)
+      : undefined;
+    const prevImageUrl =
+      prevQuestion && 'imageUrl' in prevQuestion.payload
+        ? prevQuestion.payload.imageUrl
+        : undefined;
+    const nextImageUrl =
+      'imageUrl' in payload.payload ? payload.payload.imageUrl : undefined;
+
     const saved = existingId
       ? await api.updateQuestion(existingId, payload)
       : await api.createQuestion(payload);
+
     let syncErr: string | null = null;
     if (getQuestionBankSupabaseEnabled()) {
       try {
@@ -855,9 +860,25 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
         syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
       }
     }
+
+    const otherQuestions = db.questions.filter((item) => item.id !== saved.id);
+    const obsoleteStoragePath = getObsoleteHotspotStoragePath(
+      prevImageUrl,
+      nextImageUrl,
+      otherQuestions
+    );
+    let storageCleanupErr: string | null = null;
+    if (obsoleteStoragePath && isSupabaseConfigured()) {
+      const removed = await deleteHotspotImagesFromSupabase([obsoleteStoragePath]);
+      if (!removed.ok) {
+        storageCleanupErr = removed.message || 'Không xóa được ảnh cũ khỏi Storage';
+      }
+    }
+
     await onRefresh();
-    if (syncErr) {
-      onNotify(`Đã lưu cục bộ nhưng chưa đồng bộ được lên Supabase: ${syncErr}`, true);
+    if (syncErr || storageCleanupErr) {
+      const details = [syncErr, storageCleanupErr].filter(Boolean).join('; ');
+      onNotify(`Đã lưu câu hỏi nhưng gặp lỗi đồng bộ Supabase: ${details}`, true);
     } else {
       onNotify(existingId ? 'Đã cập nhật câu hỏi.' : 'Đã thêm câu hỏi mới vào phần kiến thức.');
     }
@@ -866,6 +887,11 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   async function handleDeleteQuestion(q: Question) {
     setDeletingQuestionId(q.id);
     try {
+      const remainingQuestions = db.questions.filter((item) => item.id !== q.id);
+      const storagePathsToDelete = collectHotspotStoragePathsToDelete(
+        [q],
+        remainingQuestions
+      );
       const updatedAffectedSets = db.questionSets
         .filter((s) => s.questionIds.includes(q.id))
         .map((s) => ({
@@ -882,10 +908,18 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
           syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
         }
       }
+      let storageCleanupErr: string | null = null;
+      if (storagePathsToDelete.length > 0 && isSupabaseConfigured()) {
+        const removed = await deleteHotspotImagesFromSupabase(storagePathsToDelete);
+        if (!removed.ok) {
+          storageCleanupErr = removed.message || 'Không xóa được ảnh khỏi Storage';
+        }
+      }
       setSelectedQuestionIds((prev) => prev.filter((id) => id !== q.id));
       await onRefresh();
-      if (syncErr) {
-        onNotify(`Đã xóa cục bộ Câu ${q.topicOrder}, nhưng lỗi đồng bộ Supabase: ${syncErr}`, true);
+      if (syncErr || storageCleanupErr) {
+        const details = [syncErr, storageCleanupErr].filter(Boolean).join('; ');
+        onNotify(`Đã xóa cục bộ Câu ${q.topicOrder}, nhưng lỗi đồng bộ Supabase: ${details}`, true);
       } else {
         onNotify(`Đã xóa Câu ${q.topicOrder}.`);
       }
@@ -919,6 +953,11 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     const ids = activeSelectedQuestions.map((q) => q.id);
     if (ids.length === 0) return;
     const idSet = new Set(ids);
+    const remainingQuestions = db.questions.filter((item) => !idSet.has(item.id));
+    const storagePathsToDelete = collectHotspotStoragePathsToDelete(
+      activeSelectedQuestions,
+      remainingQuestions
+    );
     setDeletingBatchQuestions(true);
     try {
       const updatedAffectedSets = db.questionSets
@@ -937,12 +976,20 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
           syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
         }
       }
+      let storageCleanupErr: string | null = null;
+      if (storagePathsToDelete.length > 0 && isSupabaseConfigured()) {
+        const removed = await deleteHotspotImagesFromSupabase(storagePathsToDelete);
+        if (!removed.ok) {
+          storageCleanupErr = removed.message || 'Không xóa được ảnh khỏi Storage';
+        }
+      }
       setSelectedQuestionIds([]);
       setConfirmBatchDelete(false);
       await onRefresh();
-      if (syncErr) {
+      if (syncErr || storageCleanupErr) {
+        const details = [syncErr, storageCleanupErr].filter(Boolean).join('; ');
         onNotify(
-          `Đã xóa cục bộ ${ids.length} câu hỏi, nhưng lỗi đồng bộ Supabase: ${syncErr}`,
+          `Đã xóa cục bộ ${ids.length} câu hỏi, nhưng lỗi đồng bộ Supabase: ${details}`,
           true
         );
       } else {
@@ -2115,8 +2162,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
               </div>
 
               {/* Filter Bar inside Part */}
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
-                <div className="lg:col-span-6 relative">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-12 gap-3">
+                <div className="sm:col-span-8 relative">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
                     type="search"
@@ -2132,26 +2179,10 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                   aria-label="Lọc theo dạng câu hỏi"
                   value={typeFilter}
                   onChange={(e) => setTypeFilter(e.target.value as 'all' | QuestionType)}
-                  className="lg:col-span-3 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950"
+                  className="sm:col-span-4 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950"
                 >
                   <option value="all">Tất cả 5 dạng câu hỏi</option>
                   {Object.entries(QUESTION_TYPE_LABELS).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-
-                <select
-                  aria-label="Lọc theo độ khó"
-                  value={difficultyFilter}
-                  onChange={(e) =>
-                    setDifficultyFilter(e.target.value as 'all' | DifficultyLevel)
-                  }
-                  className="lg:col-span-3 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950"
-                >
-                  <option value="all">Tất cả độ khó</option>
-                  {Object.entries(DIFFICULTY_LABELS).map(([k, v]) => (
                     <option key={k} value={k}>
                       {v}
                     </option>
@@ -2279,8 +2310,6 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                               <span>{q.topic}</span>
                               {' · '}
                               <span>{QUESTION_TYPE_LABELS[q.type]}</span>
-                              {' · '}
-                              <span>{DIFFICULTY_LABELS[q.difficulty]}</span>
                             </div>
                             <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-slate-100">
                               {q.prompt}
@@ -2421,6 +2450,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                       {q.type === 'hotspot' && 'hotspotTarget' in q.payload && (
                         <div className="mt-2 max-w-2xl">
                           <HotspotCanvas
+                            imageUrl={q.payload.imageUrl}
+                            imageAlt={q.payload.imageAlt}
                             hotspotType={q.payload.hotspotType}
                             target={q.payload.hotspotTarget}
                           />

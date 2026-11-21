@@ -40,10 +40,11 @@
 - **`IC3ModuleRecord`**: `{ id, code, level, title, description, orderIndex }` *(mặc định có `computing_fundamentals` [LV1], `key_applications` [LV2], `living_online` [LV3]; cho phép thêm tùy biến)*.
 - **`KnowledgeCategoryRecord`**: `{ id, module, code, title, description, orderIndex }` *(mặc định `GM`, `OT` theo từng mô-đun; cho phép thêm tùy biến)*.
 - **`KnowledgePart`**: `{ id, module, level, category, code, title, description, orderIndex }` *(VD: `GM1`, `GM2`, `OT1`...)*.
-- **`Question`**: `{ id, module, level, category, contentCode, topicOrder, topic, type, prompt, instruction?, difficulty, payload, explanation, tips?, createdAt, updatedAt }`
+- **`Question`**: `{ id, module, level, category, contentCode, topicOrder, topic, type, prompt, instruction?, payload, explanation, tips?, createdAt, updatedAt }`
   - `type`: `'single' | 'multiple' | 'true_false' | 'matching' | 'hotspot'`
-  - `difficulty`: `'easy' | 'medium' | 'hard'`
-  - `payload`: Union type theo 5 dạng câu hỏi (options/correctOptionId, options/correctOptionIds, statements, matchingLeft/matchingRight/correctPairs, hotspotType/hotspotTarget/imageAlt).
+  - `topic`: tự động lấy theo `title` của `KnowledgePart` tương ứng (`module`, `category`, `contentCode`) trong CSDL.
+  - `instruction`: tự động gán mặc định theo `type` qua `getDefaultInstructionForQuestionType(type)`.
+  - `payload`: Union type theo 5 dạng câu hỏi (options/correctOptionId, options/correctOptionIds, statements, matchingLeft/matchingRight/correctPairs, hoặc `{ imageUrl?, hotspotType?, hotspotTarget, imageAlt }` cho dạng `hotspot` chọn điểm trên ảnh giáo viên tải lên).
 - **`QuestionSet`**: `{ id, title, description, level?, category?, contentCode?, questionIds: string[], createdAt, updatedAt }`
 
 ### 2.3. Giao bài tập, Giải lao & Báo cáo
@@ -103,5 +104,7 @@ Kịch bản SQL tại `src/data/seedData.ts` định nghĩa **17 bảng** trong
 4. **Thi đấu Realtime (4 bảng):**
    - `class_battle_configs` (`class_id PK` → `classes(id) ON DELETE CASCADE`, `question_set_id` → `question_sets(id) ON DELETE SET NULL`)
    - `battle_rooms` (`class_id` → `classes(id) ON DELETE CASCADE`) → `battle_participants` (`PK(room_id, student_id)`) & `battle_events` (`room_id` FK)
+5. **Lưu trữ ảnh Hotspot (Supabase Storage):**
+   - Bucket công khai `hotspot-images` trên `storage.buckets` cùng 4 policy RLS trên `storage.objects` (`select`, `insert`, `update`, `delete` cho `anon, authenticated`). Đường dẫn ảnh (`imageUrl`) và tọa độ vùng/điểm đúng (`hotspotTarget`) được lưu trực tiếp trong cột `questions.payload` (`jsonb`).
 
-> **Lưu ý quan trọng khi nâng cấp DB cũ trên Supabase:** `SUPABASE_SCHEMA_SQL` có sẵn đoạn gỡ bỏ các ràng buộc `CHECK` cứng cũ trên `module/level/category` và tự động `INSERT ... ON CONFLICT DO NOTHING` để tạo dữ liệu cha còn thiếu từ `questions`/`knowledge_parts` trước khi gắn 3 ràng buộc khóa ngoại `fk_knowledge_categories_module`, `fk_knowledge_parts_category`, `fk_questions_part`.
+> **Lưu ý quan trọng khi nâng cấp DB cũ trên Supabase:** `SUPABASE_SCHEMA_SQL` có sẵn đoạn gỡ bỏ các ràng buộc `CHECK` cứng cũ trên `module/level/category`, tự động `DROP COLUMN IF EXISTS difficulty` trên bảng `questions`, khởi tạo bucket `hotspot-images` trên Storage, và tự động `INSERT ... ON CONFLICT DO NOTHING` để tạo dữ liệu cha còn thiếu từ `questions`/`knowledge_parts` trước khi gắn 3 ràng buộc khóa ngoại `fk_knowledge_categories_module`, `fk_knowledge_parts_category`, `fk_questions_part`.

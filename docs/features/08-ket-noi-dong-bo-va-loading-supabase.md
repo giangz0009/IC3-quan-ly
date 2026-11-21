@@ -11,10 +11,10 @@
 |---|---|---|
 | Frontend (Tab) | `src/components/SupabaseView.tsx` | Form URL/Anon Key, bật/tắt đồng bộ 2 chiều QB, các nút Kiểm tra / Đẩy lên / Kéo QB / Đọc thử 8 dòng, khung SQL DDL + bảng trạng thái 14 bảng |
 | Frontend (Global Modal) | `src/App.tsx` | Lắng nghe `subscribeSupabaseActivity`, quản lý `syncingStartupSupabase`, render Modal Loading toàn màn hình `z-[100]` (`[data-testid="supabase-loading-modal"]`) |
-| Supabase Client | `src/utils/supabaseClient.ts` | Quản lý cấu hình `localStorage`, singleton `createBrowserSupabaseClient`, hệ thống `trackSupabaseCall` pub/sub và toàn bộ hàm gọi Supabase |
+| Supabase Client | `src/utils/supabaseClient.ts` | Quản lý cấu hình `localStorage`, singleton `createBrowserSupabaseClient`, hệ thống `trackSupabaseCall` pub/sub, `uploadHotspotImageToSupabase` và toàn bộ hàm gọi Supabase |
 | Logic thuần | `src/utils/ic3Rules.ts` | `formatSupabaseLoadingStatus()`, `buildQuestionBankSupabasePayload()` |
 | Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test định dạng thông báo nhiều tác vụ loading (`formatSupabaseLoadingStatus`) & dựng payload đồng bộ |
-| SQL DDL | `src/data/seedData.ts` | Hằng số `SUPABASE_SCHEMA_SQL` (17 bảng + FK + Migration nâng cấp + RLS) |
+| SQL DDL | `src/data/seedData.ts` | Hằng số `SUPABASE_SCHEMA_SQL` (17 bảng + FK + Migration nâng cấp + RLS + Storage bucket `hotspot-images`) |
 
 ---
 
@@ -37,7 +37,7 @@
    - Kéo 5 bảng (`ic3_modules`, `knowledge_categories`, `knowledge_parts`, `questions`, `question_sets`) về Local DB.
    - Kiểm tra rõ ràng lỗi truy vấn (thiếu bảng/lỗi RLS) so với trường hợp bảng thực sự trống 0 dòng để thông báo chính xác nguyên nhân cho giáo viên.
 4. **Đọc thử 8 dòng (`fetchSupabaseSampleQuestions`):** Truy vấn trực tiếp 8 dòng từ `knowledge_parts` và 8 dòng từ `questions` để xem trước dữ liệu thực trên Supabase.
-5. **Sao chép SQL DDL (`SUPABASE_SCHEMA_SQL`):** Hiển thị và cho phép sao chép toàn bộ kịch bản SQL chuẩn hóa 17 bảng (kèm FK 4 tầng và RLS policy cho `anon, authenticated`) để dán vào Supabase SQL Editor.
+5. **Sao chép SQL DDL (`SUPABASE_SCHEMA_SQL`):** Hiển thị và cho phép sao chép toàn bộ kịch bản SQL chuẩn hóa 17 bảng (kèm FK 4 tầng, RLS policy cho `anon, authenticated`, và khởi tạo bucket Supabase Storage `hotspot-images`) để dán vào Supabase SQL Editor.
 
 ### 2.3. Hệ thống Modal Loading Toàn màn hình (`App.tsx` + `supabaseClient.ts`)
 - Mọi lời gọi API Supabase trong `supabaseClient.ts` đều đi qua hàm bọc tập trung `trackSupabaseCall(label, fn)`:
@@ -69,5 +69,6 @@
 
 ## 5. Nhật ký thay đổi
 
+- **2026-11-20 (Bổ sung Supabase Storage cho Hotspot):** Thêm bucket công khai `hotspot-images` cùng policy RLS trên `storage.objects` vào `SUPABASE_SCHEMA_SQL`; hàm `uploadHotspotImageToSupabase` (chỉ gọi khi giáo viên bấm **Lưu Câu hỏi** và form hợp lệ) và `deleteHotspotImagesFromSupabase` (tự động xóa ảnh cũ khỏi bucket khi đổi ảnh hoặc xóa câu hỏi) đều được bọc qua `trackSupabaseCall`.
 - **2026-11-20:** Chuyển đổi cơ chế thông báo chờ Supabase sang **Modal toàn màn hình (`z-[100]`)** dùng chung toàn app qua `trackSupabaseCall`, kết hợp khóa nút cục bộ tránh bấm trùng.
 - **Trước 2026-11-20:** Hoàn thiện kịch bản SQL 17 bảng kèm FK 4 tầng + RLS, bổ sung nút kiểm tra 14 bảng, đọc thử 8 dòng và phân biệt thông báo lỗi RLS với bảng rỗng.

@@ -6,6 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import { createSeedDatabase } from './src/data/seedData';
 import {
   calculateIC3Score,
+  getDefaultInstructionForQuestionType,
   getNextTopicOrder,
   isStudentBreakUnlocked,
   normalizeVietnamesePassword,
@@ -96,7 +97,7 @@ function makeId(prefix: string): string {
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: '4mb' }));
+  app.use(express.json({ limit: '15mb' }));
 
   // --- Health ---
   app.get('/api/health', (_req, res) => {
@@ -681,7 +682,13 @@ async function startServer() {
     }
     const cleanCategory = q.category.trim().toUpperCase();
     const contentCode = (q.contentCode || `${cleanCategory}1`).trim().toUpperCase();
-    const topicText = (q.topic || 'Tổng hợp').trim();
+    const matchedPart = db.knowledgeParts.find(
+      (p) =>
+        p.module === q.module &&
+        p.category.trim().toUpperCase() === cleanCategory &&
+        p.code.trim().toUpperCase() === contentCode
+    );
+    const topicText = (q.topic || matchedPart?.title || 'Tổng hợp').trim();
     ensureQuestionParents(q.module, q.level, cleanCategory, contentCode, topicText);
     const topicOrder =
       typeof q.topicOrder === 'number' && q.topicOrder >= 1
@@ -698,8 +705,7 @@ async function startServer() {
       topic: topicText,
       type: q.type,
       prompt: q.prompt.trim(),
-      instruction: q.instruction?.trim(),
-      difficulty: q.difficulty || 'medium',
+      instruction: q.instruction?.trim() || getDefaultInstructionForQuestionType(q.type),
       payload: q.payload,
       explanation: (q.explanation || '').trim(),
       tips: q.tips?.trim(),
@@ -740,17 +746,34 @@ async function startServer() {
       .toUpperCase();
     const nextModule = String(req.body.module || existing.module);
     const nextLevel = String(req.body.level || existing.level);
-    const nextTopic = String(req.body.topic || existing.topic).trim() || 'Tổng hợp';
+    const nextType = (req.body.type || existing.type) as Question['type'];
+    const matchedPart = db.knowledgeParts.find(
+      (p) =>
+        p.module === nextModule &&
+        p.category.trim().toUpperCase() === nextCategory &&
+        p.code.trim().toUpperCase() === nextContentCode
+    );
+    const nextTopic =
+      String(req.body.topic || matchedPart?.title || existing.topic).trim() || 'Tổng hợp';
     ensureQuestionParents(nextModule, nextLevel, nextCategory, nextContentCode, nextTopic);
+    const { difficulty: _dropExistingDiff, ...cleanExisting } = existing as Question & {
+      difficulty?: unknown;
+    };
+    const { difficulty: _dropBodyDiff, ...cleanBody } = (req.body ?? {}) as Record<string, unknown>;
     const updated: Question = {
-      ...existing,
-      ...req.body,
+      ...cleanExisting,
+      ...cleanBody,
       id: existing.id,
       module: nextModule,
       level: nextLevel,
       category: nextCategory,
       contentCode: nextContentCode,
       topic: nextTopic,
+      type: nextType,
+      instruction:
+        typeof req.body.instruction === 'string' && req.body.instruction.trim()
+          ? req.body.instruction.trim()
+          : getDefaultInstructionForQuestionType(nextType),
       topicOrder:
         typeof req.body.topicOrder === 'number' && req.body.topicOrder >= 1
           ? Math.round(req.body.topicOrder)

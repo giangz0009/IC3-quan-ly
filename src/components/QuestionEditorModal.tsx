@@ -1,11 +1,9 @@
-import React, { useState } from 'react';
-import { Loader2, Plus, Trash2, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ImagePlus, Loader2, Plus, Trash2, Upload, X } from 'lucide-react';
 import {
   CATEGORY_LABELS,
-  HOTSPOT_TYPE_LABELS,
   MODULE_LABELS,
   QUESTION_TYPE_LABELS,
-  type DifficultyLevel,
   type HotspotTarget,
   type HotspotType,
   type IC3Level,
@@ -22,7 +20,52 @@ import {
   type QuestionType,
   type TrueFalseStatement,
 } from '../types/ic3';
+import {
+  extractImageFileFromClipboardData,
+  getDefaultInstructionForQuestionType,
+  shouldUploadHotspotFileOnSave,
+} from '../utils/ic3Rules';
+import {
+  isSupabaseConfigured,
+  uploadHotspotImageToSupabase,
+} from '../utils/supabaseClient';
 import { HotspotCanvas } from './HotspotCanvas';
+
+async function fileToCompressedDataUrl(file: File): Promise<string> {
+  const rawUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Không đọc được tệp ảnh đã chọn.'));
+    reader.readAsDataURL(file);
+  });
+
+  if (file.type === 'image/gif' || file.type === 'image/svg+xml') {
+    return rawUrl;
+  }
+
+  return new Promise<string>((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const maxWidth = 1400;
+      const scale = img.width > maxWidth ? maxWidth / img.width : 1;
+      const width = Math.max(1, Math.round(img.width * scale));
+      const height = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(rawUrl);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+      const output = canvas.toDataURL('image/webp', 0.86);
+      resolve(output && output.length < rawUrl.length ? output : rawUrl);
+    };
+    img.onerror = () => resolve(rawUrl);
+    img.src = rawUrl;
+  });
+}
 
 export interface QuestionDefaultContext {
   module: IC3Module;
@@ -51,6 +94,8 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
   onClose,
   onSave,
 }) => {
+  const isContextLocked = !initialQuestion && Boolean(defaultContext);
+
   const [module, setModule] = useState<IC3Module>(
     initialQuestion?.module ?? defaultContext?.module ?? 'computing_fundamentals'
   );
@@ -66,13 +111,8 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
   const [topicOrder, setTopicOrder] = useState<number>(
     initialQuestion?.topicOrder ?? defaultContext?.topicOrder ?? 1
   );
-  const [topic, setTopic] = useState(initialQuestion?.topic ?? 'Phần cứng & Hệ điều hành');
-  const [difficulty, setDifficulty] = useState<DifficultyLevel>(
-    initialQuestion?.difficulty ?? 'medium'
-  );
   const [type, setType] = useState<QuestionType>(initialQuestion?.type ?? 'single');
   const [prompt, setPrompt] = useState(initialQuestion?.prompt ?? '');
-  const [instruction, setInstruction] = useState(initialQuestion?.instruction ?? '');
   const [explanation, setExplanation] = useState(initialQuestion?.explanation ?? '');
   const [tips, setTips] = useState(initialQuestion?.tips ?? '');
 
@@ -136,30 +176,108 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
         ]
   );
 
-  const [hotspotType, setHotspotType] = useState<HotspotType>(
+  const hotspotFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [hotspotType, setHotspotType] = useState<HotspotType | undefined>(
     initialPayload && 'hotspotType' in initialPayload
       ? initialPayload.hotspotType
-      : 'word_ribbon'
+      : undefined
   );
+  const [savedHotspotImageUrl, setSavedHotspotImageUrl] = useState<string>(
+    initialPayload && 'imageUrl' in initialPayload && initialPayload.imageUrl
+      ? initialPayload.imageUrl
+      : ''
+  );
+  const [pendingHotspotFile, setPendingHotspotFile] = useState<File | null>(null);
+  const [pendingHotspotPreviewUrl, setPendingHotspotPreviewUrl] = useState<string>('');
+  const displayedHotspotImageUrl = pendingHotspotPreviewUrl || savedHotspotImageUrl;
+
+  useEffect(() => {
+    return () => {
+      if (pendingHotspotPreviewUrl && pendingHotspotPreviewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(pendingHotspotPreviewUrl);
+      }
+    };
+  }, [pendingHotspotPreviewUrl]);
+
   const [hotspotTarget, setHotspotTarget] = useState<HotspotTarget>(
     initialPayload && 'hotspotTarget' in initialPayload
       ? initialPayload.hotspotTarget
       : {
-          label: 'Vùng đáp án',
-          minX: 20,
-          minY: 35,
-          maxX: 35,
-          maxY: 60,
+          label: 'Điểm đáp án đúng',
+          minX: 46,
+          minY: 44,
+          maxX: 54,
+          maxY: 56,
         }
+  );
+  const [hasHotspotTarget, setHasHotspotTarget] = useState<boolean>(
+    Boolean(initialPayload && 'hotspotTarget' in initialPayload)
   );
   const [imageAlt, setImageAlt] = useState(
     initialPayload && 'imageAlt' in initialPayload
       ? initialPayload.imageAlt
-      : 'Ảnh giao diện IC3'
+      : 'Ảnh câu hỏi chọn điểm trên hình'
   );
+  const [uploadingHotspotImage, setUploadingHotspotImage] = useState(false);
+  const [hotspotUploadNote, setHotspotUploadNote] = useState<string | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  function handleHotspotFileSelected(
+    file: File | undefined,
+    source: 'upload' | 'paste' = 'upload'
+  ) {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setError('Vui lòng chọn đúng định dạng tệp hình ảnh (PNG, JPG, WebP...).');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Ảnh tải lên không được vượt quá 10 MB.');
+      return;
+    }
+
+    setError(null);
+    const previewUrl = URL.createObjectURL(file);
+    const actionVerb = source === 'paste' ? 'dán ảnh' : 'chọn ảnh';
+    setPendingHotspotFile(file);
+    setPendingHotspotPreviewUrl(previewUrl);
+    setHotspotType(undefined);
+    setHasHotspotTarget(false);
+    setHotspotUploadNote(
+      isSupabaseConfigured()
+        ? `Đã ${actionVerb} xem trước (chưa lưu vào Storage). Hãy nhấp vào điểm đúng trên hình rồi bấm "Lưu Câu hỏi" để tải lên Supabase.`
+        : `Đã ${actionVerb} xem trước. Hãy nhấp vào điểm đúng trên hình rồi bấm "Lưu Câu hỏi".`
+    );
+    if (!imageAlt.trim() || imageAlt === 'Ảnh câu hỏi chọn điểm trên hình') {
+      const cleanName = (file.name || '').replace(/\.[^.]+$/, '').trim();
+      if (cleanName && cleanName.toLowerCase() !== 'image') {
+        setImageAlt(cleanName);
+      }
+    }
+    if (hotspotFileInputRef.current) {
+      hotspotFileInputRef.current.value = '';
+    }
+  }
+
+  const pasteHandlerRef = useRef<(file: File) => void>(() => {});
+  pasteHandlerRef.current = (file: File) => {
+    if (uploadingHotspotImage || saving) return;
+    void handleHotspotFileSelected(file, 'paste');
+  };
+
+  useEffect(() => {
+    if (type !== 'hotspot') return;
+    const onWindowPaste = (e: ClipboardEvent) => {
+      const imageFile = extractImageFileFromClipboardData(e.clipboardData);
+      if (!imageFile) return;
+      e.preventDefault();
+      pasteHandlerRef.current(imageFile);
+    };
+    window.addEventListener('paste', onWindowPaste);
+    return () => window.removeEventListener('paste', onWindowPaste);
+  }, [type]);
 
   function buildPayload(): QuestionPayload | null {
     if (type === 'single') {
@@ -223,10 +341,21 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
       };
     }
 
+    if (!displayedHotspotImageUrl && !hotspotType) {
+      setError('Vui lòng tải lên hình ảnh cho câu hỏi chọn điểm trên hình.');
+      return null;
+    }
+    if (!hasHotspotTarget) {
+      setError('Vui lòng nhấp chuột hoặc kéo khoanh vùng để chỉ ra điểm đúng trên hình.');
+      return null;
+    }
     return {
-      hotspotType,
+      ...(savedHotspotImageUrl && !pendingHotspotFile
+        ? { imageUrl: savedHotspotImageUrl }
+        : {}),
+      ...(hotspotType && !displayedHotspotImageUrl ? { hotspotType } : {}),
       hotspotTarget,
-      imageAlt: imageAlt.trim() || HOTSPOT_TYPE_LABELS[hotspotType],
+      imageAlt: imageAlt.trim() || 'Ảnh câu hỏi chọn điểm trên hình',
     };
   }
 
@@ -237,24 +366,69 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
       setError('Vui lòng nhập nội dung câu hỏi.');
       return;
     }
-    const payload = buildPayload();
-    if (!payload) return;
+    const basePayload = buildPayload();
+    if (!basePayload) return;
+
+    const cleanCategory = category.trim().toUpperCase();
+    const cleanContentCode = (contentCode.trim() || `${cleanCategory}1`).toUpperCase();
+    const matchedPart = availableParts.find(
+      (p) =>
+        p.module === module &&
+        p.category.trim().toUpperCase() === cleanCategory &&
+        p.code.trim().toUpperCase() === cleanContentCode
+    );
+    const resolvedTopic =
+      matchedPart?.title?.trim() ||
+      initialQuestion?.topic?.trim() ||
+      cleanContentCode ||
+      'Tổng hợp';
 
     setSaving(true);
     try {
+      let finalPayload: QuestionPayload = basePayload;
+      if (type === 'hotspot' && pendingHotspotFile) {
+        setUploadingHotspotImage(true);
+        try {
+          let resolvedImageUrl = '';
+          const shouldUploadToStorage = shouldUploadHotspotFileOnSave({
+            questionType: type,
+            hasPendingFile: Boolean(pendingHotspotFile),
+            supabaseConfigured: isSupabaseConfigured(),
+            promptValid: Boolean(prompt.trim()),
+            hotspotImageReady: Boolean(displayedHotspotImageUrl || hotspotType),
+            hotspotTargetReady: hasHotspotTarget,
+          });
+          if (shouldUploadToStorage) {
+            const uploaded = await uploadHotspotImageToSupabase(pendingHotspotFile);
+            if (uploaded.ok && uploaded.url) {
+              resolvedImageUrl = uploaded.url;
+            } else {
+              resolvedImageUrl = await fileToCompressedDataUrl(pendingHotspotFile);
+            }
+          } else {
+            resolvedImageUrl = await fileToCompressedDataUrl(pendingHotspotFile);
+          }
+          finalPayload = {
+            ...basePayload,
+            imageUrl: resolvedImageUrl,
+          };
+        } finally {
+          setUploadingHotspotImage(false);
+        }
+      }
+
       await onSave(
         {
           module,
           level,
-          category,
-          contentCode: contentCode.trim() || `${category}1`,
+          category: cleanCategory,
+          contentCode: cleanContentCode,
           topicOrder: Math.max(1, Math.round(Number(topicOrder) || 1)),
-          topic: topic.trim() || 'Tổng hợp',
+          topic: resolvedTopic,
           type,
           prompt: prompt.trim(),
-          instruction: instruction.trim() || undefined,
-          difficulty,
-          payload,
+          instruction: getDefaultInstructionForQuestionType(type),
+          payload: finalPayload,
           explanation: explanation.trim(),
           tips: tips.trim() || undefined,
         },
@@ -349,207 +523,173 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
               categoryOptions.push({ code: category, title: `Nhóm ${category}` });
             }
 
+            const matchingParts = availableParts.filter(
+              (p) => p.module === module && p.category === category
+            );
+            const hasCurrentPart = matchingParts.some(
+              (p) => p.code.toLowerCase() === contentCode.trim().toLowerCase()
+            );
+
             return (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                <div className="lg:col-span-2">
-                  <label htmlFor="q-module" className="block text-xs font-medium mb-1">
-                    Mô-đun IC3
-                  </label>
-                  <select
-                    id="q-module"
-                    value={module}
-                    onChange={(e) => {
-                      const m = e.target.value as IC3Module;
-                      setModule(m);
-                      const modObj = moduleOptions.find((x) => x.code === m);
-                      if (modObj) {
-                        setLevel(modObj.level);
-                      } else if (m === 'computing_fundamentals') {
-                        setLevel('LV1');
-                      } else if (m === 'key_applications') {
-                        setLevel('LV2');
-                      } else if (m === 'living_online') {
-                        setLevel('LV3');
-                      }
-                      const nextCats = availableCategories.filter((c) => c.module === m);
-                      const nextCatCode =
-                        nextCats.length > 0 &&
-                        !nextCats.some(
-                          (c) => c.code.toUpperCase() === category.toUpperCase()
-                        )
-                          ? nextCats[0].code
-                          : category;
-                      if (nextCatCode !== category) {
-                        setCategory(nextCatCode);
-                      }
-                      const matching = availableParts.filter(
-                        (p) => p.module === m && p.category === nextCatCode
-                      );
-                      if (matching.length > 0) {
-                        if (!matching.some((p) => p.code === contentCode)) {
-                          setContentCode(matching[0].code);
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                  <div className="sm:col-span-5">
+                    <label htmlFor="q-module" className="block text-xs font-medium mb-1">
+                      Mô-đun IC3
+                    </label>
+                    <select
+                      id="q-module"
+                      disabled={isContextLocked}
+                      value={module}
+                      onChange={(e) => {
+                        const m = e.target.value as IC3Module;
+                        setModule(m);
+                        const modObj = moduleOptions.find((x) => x.code === m);
+                        if (modObj) {
+                          setLevel(modObj.level);
+                        } else if (m === 'computing_fundamentals') {
+                          setLevel('LV1');
+                        } else if (m === 'key_applications') {
+                          setLevel('LV2');
+                        } else if (m === 'living_online') {
+                          setLevel('LV3');
                         }
-                      } else {
-                        setContentCode(`${nextCatCode}1`);
+                        const nextCats = availableCategories.filter((c) => c.module === m);
+                        const nextCatCode =
+                          nextCats.length > 0 &&
+                          !nextCats.some(
+                            (c) => c.code.toUpperCase() === category.toUpperCase()
+                          )
+                            ? nextCats[0].code
+                            : category;
+                        if (nextCatCode !== category) {
+                          setCategory(nextCatCode);
+                        }
+                        const matching = availableParts.filter(
+                          (p) => p.module === m && p.category === nextCatCode
+                        );
+                        if (matching.length > 0) {
+                          if (!matching.some((p) => p.code === contentCode)) {
+                            setContentCode(matching[0].code);
+                          }
+                        } else {
+                          setContentCode(`${nextCatCode}1`);
+                        }
+                      }}
+                      className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 disabled:bg-slate-100 dark:disabled:bg-slate-900 disabled:text-slate-500 dark:disabled:text-slate-400 disabled:cursor-not-allowed"
+                    >
+                      {moduleOptions.map((m) => (
+                        <option key={m.code} value={m.code}>
+                          {m.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="sm:col-span-3">
+                    <label htmlFor="q-category" className="block text-xs font-medium mb-1">
+                      Nhóm kiến thức
+                    </label>
+                    <select
+                      id="q-category"
+                      disabled={isContextLocked}
+                      value={category}
+                      onChange={(e) => {
+                        const nextCat = e.target.value as KnowledgeCategory;
+                        setCategory(nextCat);
+                        const matching = availableParts.filter(
+                          (p) => p.module === module && p.category === nextCat
+                        );
+                        if (matching.length > 0) {
+                          setContentCode(matching[0].code);
+                        } else {
+                          setContentCode(`${nextCat}1`);
+                        }
+                      }}
+                      className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 disabled:bg-slate-100 dark:disabled:bg-slate-900 disabled:text-slate-500 dark:disabled:text-slate-400 disabled:cursor-not-allowed"
+                    >
+                      {categoryOptions.map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.code} — {c.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="sm:col-span-4">
+                    <label htmlFor="q-content-code" className="block text-xs font-medium mb-1">
+                      Phần kiến thức
+                    </label>
+                    {matchingParts.length > 0 ? (
+                      <select
+                        id="q-content-code"
+                        disabled={isContextLocked}
+                        value={contentCode}
+                        onChange={(e) => setContentCode(e.target.value)}
+                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 disabled:bg-slate-100 dark:disabled:bg-slate-900 disabled:text-slate-500 dark:disabled:text-slate-400 disabled:cursor-not-allowed"
+                      >
+                        {matchingParts.map((p) => (
+                          <option key={p.id} value={p.code}>
+                            {p.code} — {p.title}
+                          </option>
+                        ))}
+                        {!hasCurrentPart && contentCode.trim() && (
+                          <option value={contentCode}>{contentCode}</option>
+                        )}
+                      </select>
+                    ) : (
+                      <input
+                        id="q-content-code"
+                        type="text"
+                        required
+                        disabled={isContextLocked}
+                        value={contentCode}
+                        onChange={(e) => setContentCode(e.target.value)}
+                        placeholder={`${category}1`}
+                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 disabled:bg-slate-100 dark:disabled:bg-slate-900 disabled:text-slate-500 dark:disabled:text-slate-400 disabled:cursor-not-allowed"
+                      />
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                  <div className="sm:col-span-8">
+                    <label htmlFor="q-type" className="block text-xs font-medium mb-1">
+                      Dạng câu hỏi
+                    </label>
+                    <select
+                      id="q-type"
+                      value={type}
+                      onChange={(e) => setType(e.target.value as QuestionType)}
+                      className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                    >
+                      {Object.entries(QUESTION_TYPE_LABELS).map(([k, label]) => (
+                        <option key={k} value={k}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="sm:col-span-4">
+                    <label htmlFor="q-topic-order" className="block text-xs font-medium mb-1">
+                      STT câu hỏi
+                    </label>
+                    <input
+                      id="q-topic-order"
+                      type="number"
+                      min={1}
+                      required
+                      value={topicOrder}
+                      onChange={(e) =>
+                        setTopicOrder(Math.max(1, Number(e.target.value) || 1))
                       }
-                    }}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                  >
-                    {moduleOptions.map((m) => (
-                      <option key={m.code} value={m.code}>
-                        {m.title}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="q-type" className="block text-xs font-medium mb-1">
-                    Dạng câu hỏi
-                  </label>
-                  <select
-                    id="q-type"
-                    value={type}
-                    onChange={(e) => setType(e.target.value as QuestionType)}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                  >
-                    {Object.entries(QUESTION_TYPE_LABELS).map(([k, label]) => (
-                      <option key={k} value={k}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="q-category" className="block text-xs font-medium mb-1">
-                    Nhóm kiến thức
-                  </label>
-                  <select
-                    id="q-category"
-                    value={category}
-                    onChange={(e) => {
-                      const nextCat = e.target.value as KnowledgeCategory;
-                      setCategory(nextCat);
-                      const matching = availableParts.filter(
-                        (p) => p.module === module && p.category === nextCat
-                      );
-                      if (matching.length > 0) {
-                        setContentCode(matching[0].code);
-                      } else {
-                        setContentCode(`${nextCat}1`);
-                      }
-                    }}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                  >
-                    {categoryOptions.map((c) => (
-                      <option key={c.code} value={c.code}>
-                        {c.code} — {c.title}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="q-difficulty" className="block text-xs font-medium mb-1">
-                    Độ khó
-                  </label>
-                  <select
-                    id="q-difficulty"
-                    value={difficulty}
-                    onChange={(e) => setDifficulty(e.target.value as DifficultyLevel)}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                  >
-                    <option value="easy">Cơ bản</option>
-                    <option value="medium">Trung bình</option>
-                    <option value="hard">Nâng cao</option>
-                  </select>
+                      className="w-full px-3 py-2 text-sm font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                    />
+                  </div>
                 </div>
               </div>
             );
           })()}
-
-          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-            <div className="sm:col-span-3">
-              <label htmlFor="q-content-code" className="block text-xs font-medium mb-1">
-                Phần kiến thức
-              </label>
-              {(() => {
-                const matchingParts = availableParts.filter(
-                  (p) => p.module === module && p.category === category
-                );
-                if (matchingParts.length > 0) {
-                  const hasCurrent = matchingParts.some(
-                    (p) => p.code.toLowerCase() === contentCode.trim().toLowerCase()
-                  );
-                  return (
-                    <select
-                      id="q-content-code"
-                      value={contentCode}
-                      onChange={(e) => setContentCode(e.target.value)}
-                      className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                    >
-                      {matchingParts.map((p) => (
-                        <option key={p.id} value={p.code}>
-                          {p.code} — {p.title}
-                        </option>
-                      ))}
-                      {!hasCurrent && contentCode.trim() && (
-                        <option value={contentCode}>{contentCode}</option>
-                      )}
-                    </select>
-                  );
-                }
-                return (
-                  <input
-                    id="q-content-code"
-                    type="text"
-                    required
-                    value={contentCode}
-                    onChange={(e) => setContentCode(e.target.value)}
-                    placeholder={`${category}1`}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-                  />
-                );
-              })()}
-            </div>
-            <div className="sm:col-span-2">
-              <label htmlFor="q-topic-order" className="block text-xs font-medium mb-1">
-                STT câu hỏi
-              </label>
-              <input
-                id="q-topic-order"
-                type="number"
-                min={1}
-                required
-                value={topicOrder}
-                onChange={(e) => setTopicOrder(Math.max(1, Number(e.target.value) || 1))}
-                className="w-full px-3 py-2 text-sm font-mono tabular-nums rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-              />
-            </div>
-            <div className="sm:col-span-3">
-              <label htmlFor="q-topic" className="block text-xs font-medium mb-1">
-                Chủ đề kiến thức
-              </label>
-              <input
-                id="q-topic"
-                type="text"
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-              />
-            </div>
-            <div className="sm:col-span-4">
-              <label htmlFor="q-instruction" className="block text-xs font-medium mb-1">
-                Hướng dẫn ngắn (tùy chọn)
-              </label>
-              <input
-                id="q-instruction"
-                type="text"
-                placeholder="VD: Chọn TẤT CẢ đáp án đúng"
-                value={instruction}
-                onChange={(e) => setInstruction(e.target.value)}
-                className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
-              />
-            </div>
-          </div>
 
           <div>
             <label htmlFor="q-prompt" className="block text-xs font-medium mb-1">
@@ -818,27 +958,76 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
 
             {type === 'hotspot' && (
               <div className="space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <input
+                  ref={hotspotFileInputRef}
+                  id="hs-image-upload"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  onChange={(e) => handleHotspotFileSelected(e.target.files?.[0])}
+                  className="sr-only"
+                />
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <label htmlFor="hs-template" className="block text-xs font-medium mb-1">
-                      Mẫu giao diện Hotspot
-                    </label>
-                    <select
-                      id="hs-template"
-                      value={hotspotType}
-                      onChange={(e) => setHotspotType(e.target.value as HotspotType)}
-                      className="w-full px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
-                    >
-                      {Object.entries(HOTSPOT_TYPE_LABELS).map(([k, label]) => (
-                        <option key={k} value={k}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                      Ảnh câu hỏi &amp; Chọn điểm đáp án đúng
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Tải ảnh PNG/JPG/WebP lên hoặc nhấn <kbd className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-[10px]">Ctrl + V</kbd> để dán ảnh trực tiếp, rồi nhấp vào điểm đúng trên hình.
+                    </p>
                   </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={uploadingHotspotImage || saving}
+                      onClick={() => hotspotFileInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      {uploadingHotspotImage ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Upload className="w-3.5 h-3.5" />
+                      )}
+                      <span>
+                        {uploadingHotspotImage
+                          ? 'Đang tải ảnh lên...'
+                          : displayedHotspotImageUrl || hotspotType
+                            ? 'Đổi ảnh khác'
+                            : 'Tải ảnh lên'}
+                      </span>
+                    </button>
+                    {displayedHotspotImageUrl && (
+                      <button
+                        type="button"
+                        disabled={uploadingHotspotImage || saving}
+                        onClick={() => {
+                          setPendingHotspotFile(null);
+                          setPendingHotspotPreviewUrl('');
+                          setSavedHotspotImageUrl('');
+                          setHotspotType(undefined);
+                          setHasHotspotTarget(false);
+                          setHotspotUploadNote(null);
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Xóa ảnh</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {hotspotUploadNote && (
+                  <div className="p-2.5 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/70 dark:bg-blue-950/40 text-xs text-blue-800 dark:text-blue-200">
+                    {hotspotUploadNote}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label htmlFor="hs-label" className="block text-xs font-medium mb-1">
-                      Nhãn vùng đáp án đúng
+                      Nhãn điểm / vùng đáp án đúng
                     </label>
                     <input
                       id="hs-label"
@@ -864,12 +1053,41 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
                   </div>
                 </div>
 
-                <HotspotCanvas
-                  hotspotType={hotspotType}
-                  target={hotspotTarget}
-                  editable
-                  onChangeTarget={setHotspotTarget}
-                />
+                {displayedHotspotImageUrl || hotspotType ? (
+                  <HotspotCanvas
+                    imageUrl={displayedHotspotImageUrl || undefined}
+                    imageAlt={imageAlt}
+                    hotspotType={hotspotType}
+                    target={hotspotTarget}
+                    hasTarget={hasHotspotTarget}
+                    editable
+                    onChangeTarget={(next) => {
+                      setHotspotTarget(next);
+                      setHasHotspotTarget(true);
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    disabled={uploadingHotspotImage || saving}
+                    onClick={() => hotspotFileInputRef.current?.click()}
+                    className="w-full py-10 px-4 rounded-lg border-2 border-dashed border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-blue-500 dark:hover:border-blue-500 transition-colors flex flex-col items-center justify-center gap-2 text-center cursor-pointer disabled:opacity-50"
+                  >
+                    {uploadingHotspotImage ? (
+                      <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                    ) : (
+                      <ImagePlus className="w-8 h-8 text-slate-400" />
+                    )}
+                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                      {uploadingHotspotImage
+                        ? 'Đang xử lý ảnh...'
+                        : 'Bấm để chọn ảnh hoặc nhấn Ctrl + V để dán ảnh trực tiếp'}
+                    </span>
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Hỗ trợ PNG, JPG, WebP, GIF (tối đa 10 MB)
+                    </span>
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -913,11 +1131,17 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || uploadingHotspotImage}
               className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              <span>{saving ? 'Đang lưu & đồng bộ...' : 'Lưu Câu hỏi'}</span>
+              <span>
+                {uploadingHotspotImage
+                  ? 'Đang tải ảnh lên Storage...'
+                  : saving
+                    ? 'Đang lưu & đồng bộ...'
+                    : 'Lưu Câu hỏi'}
+              </span>
             </button>
           </div>
         </form>

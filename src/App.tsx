@@ -22,11 +22,14 @@ import { QuestionBankView } from './components/QuestionBankView';
 import { ReportsView } from './components/ReportsView';
 import { SchoolsStudentsView } from './components/SchoolsStudentsView';
 import { SupabaseView } from './components/SupabaseView';
+import { ToastContainer, type ToastItem } from './components/ToastContainer';
 import type { AdminDatabase } from './types/ic3';
 import { api, type SafeTeacher } from './utils/api';
 import {
   formatSupabaseLoadingStatus,
+  resolveToastVariant,
   type SupabasePendingTask,
+  type ToastVariant,
 } from './utils/ic3Rules';
 import {
   fetchQuestionBankFromSupabase,
@@ -90,9 +93,7 @@ export default function App() {
     SupabasePendingTask[]
   >(() => getActiveSupabaseTasks());
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ msg: string; isError: boolean } | null>(
-    null
-  );
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   useEffect(() => {
     return subscribeSupabaseActivity(setActiveSupabaseTasks);
@@ -109,12 +110,23 @@ export default function App() {
     }
   }, [isDark]);
 
-  const notify = useCallback((msg: string, isError = false) => {
-    setToast({ msg, isError });
-    window.setTimeout(() => {
-      setToast((curr) => (curr?.msg === msg ? null : curr));
-    }, 4500);
+  const dismissToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((item) => item.id !== id));
   }, []);
+
+  const notify = useCallback(
+    (msg: string, variantOrIsError: boolean | ToastVariant = false) => {
+      const variant = resolveToastVariant(msg, variantOrIsError);
+      const id = Date.now() + Math.floor(Math.random() * 10000);
+      setToasts((prev) => [...prev.slice(-3), { id, msg, variant }]);
+      const durationMs =
+        variant === 'error' || variant === 'warning' ? 6500 : 4500;
+      window.setTimeout(() => {
+        setToasts((prev) => prev.filter((item) => item.id !== id));
+      }, durationMs);
+    },
+    []
+  );
 
   const refreshData = useCallback(async () => {
     setLoadingDb(true);
@@ -369,27 +381,6 @@ export default function App() {
         </header>
 
         <main className="flex-1 p-4 sm:p-8 max-w-7xl w-full mx-auto">
-          {toast && (
-            <div
-              role="status"
-              className={`mb-6 px-4 py-3 rounded-lg border text-xs font-medium flex items-center justify-between gap-4 ${
-                toast.isError
-                  ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-900/60 dark:bg-red-950/50 dark:text-red-300'
-                  : 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-300'
-              }`}
-            >
-              <span>{toast.msg}</span>
-              <button
-                type="button"
-                aria-label="Đóng thông báo"
-                onClick={() => setToast(null)}
-                className="opacity-70 hover:opacity-100 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
           {loadError && (
             <div
               role="alert"
@@ -513,6 +504,7 @@ export default function App() {
           </div>
         </div>
       )}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

@@ -1,16 +1,26 @@
 import React, { useRef, useState } from 'react';
 import type { HotspotTarget, HotspotType } from '../types/ic3';
+import {
+  buildHotspotTargetFromPoints,
+  getHotspotTargetCenter,
+} from '../utils/ic3Rules';
 
 interface HotspotCanvasProps {
-  hotspotType: HotspotType;
+  imageUrl?: string;
+  imageAlt?: string;
+  hotspotType?: HotspotType;
   target: HotspotTarget;
+  hasTarget?: boolean;
   editable?: boolean;
   onChangeTarget?: (next: HotspotTarget) => void;
 }
 
 export const HotspotCanvas: React.FC<HotspotCanvasProps> = ({
+  imageUrl,
+  imageAlt,
   hotspotType,
   target,
+  hasTarget = true,
   editable = false,
   onChangeTarget,
 }) => {
@@ -46,27 +56,17 @@ export const HotspotCanvas: React.FC<HotspotCanvasProps> = ({
       setDragCurrent(null);
       return;
     }
-    const minX = Number(Math.min(dragStart.x, dragCurrent.x).toFixed(1));
-    const maxX = Number(Math.max(dragStart.x, dragCurrent.x).toFixed(1));
-    const minY = Number(Math.min(dragStart.y, dragCurrent.y).toFixed(1));
-    const maxY = Number(Math.max(dragStart.y, dragCurrent.y).toFixed(1));
-
-    // If user just clicked instead of dragging, create an 8%x14% box around click
-    if (maxX - minX < 2 || maxY - minY < 2) {
-      onChangeTarget({
-        ...target,
-        minX: Number(Math.max(0, minX - 4).toFixed(1)),
-        maxX: Number(Math.min(100, minX + 4).toFixed(1)),
-        minY: Number(Math.max(0, minY - 7).toFixed(1)),
-        maxY: Number(Math.min(100, minY + 7).toFixed(1)),
-      });
-    } else {
-      onChangeTarget({ ...target, minX, minY, maxX, maxY });
-    }
+    const nextTarget = buildHotspotTargetFromPoints(
+      dragStart,
+      dragCurrent,
+      target.label
+    );
+    onChangeTarget(nextTarget);
     setDragStart(null);
     setDragCurrent(null);
   }
 
+  const isDragging = Boolean(dragStart && dragCurrent);
   const previewBox =
     dragStart && dragCurrent
       ? {
@@ -77,6 +77,9 @@ export const HotspotCanvas: React.FC<HotspotCanvasProps> = ({
         }
       : target;
 
+  const showOverlay = isDragging || hasTarget;
+  const center = getHotspotTargetCenter(target);
+
   return (
     <div className="space-y-2">
       <div
@@ -84,37 +87,63 @@ export const HotspotCanvas: React.FC<HotspotCanvasProps> = ({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        className={`relative w-full aspect-[16/7] rounded-lg border border-slate-300 dark:border-slate-700 overflow-hidden select-none bg-slate-100 dark:bg-slate-900 ${
+        className={`relative w-full ${
+          imageUrl ? '' : 'aspect-[16/7]'
+        } rounded-lg border border-slate-300 dark:border-slate-700 overflow-hidden select-none bg-slate-100 dark:bg-slate-900 ${
           editable ? 'cursor-crosshair' : 'cursor-default'
         }`}
       >
-        {renderMockInterface(hotspotType)}
+        {imageUrl ? (
+          <img
+            src={imageUrl}
+            alt={imageAlt || 'Ảnh câu hỏi chọn điểm trên hình'}
+            draggable={false}
+            className="w-full h-auto block select-none pointer-events-none"
+          />
+        ) : hotspotType ? (
+          renderMockInterface(hotspotType)
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-xs text-slate-400">
+            Chưa có ảnh câu hỏi
+          </div>
+        )}
 
-        {/* Target Hotspot Box */}
-        <div
-          style={{
-            left: `${previewBox.minX}%`,
-            top: `${previewBox.minY}%`,
-            width: `${Math.max(1, previewBox.maxX - previewBox.minX)}%`,
-            height: `${Math.max(1, previewBox.maxY - previewBox.minY)}%`,
-          }}
-          className="absolute border-2 border-blue-600 bg-blue-500/20 dark:border-blue-400 dark:bg-blue-400/25 pointer-events-none rounded"
-        >
-          <span className="absolute -top-6 left-0 px-1.5 py-0.5 text-[11px] font-medium bg-blue-600 text-white rounded whitespace-nowrap shadow-sm">
-            {target.label || 'Vùng đáp án'}
-          </span>
-        </div>
+        {/* Target Hotspot Box & Center Point Marker */}
+        {showOverlay && (
+          <div
+            style={{
+              left: `${previewBox.minX}%`,
+              top: `${previewBox.minY}%`,
+              width: `${Math.max(1, previewBox.maxX - previewBox.minX)}%`,
+              height: `${Math.max(1, previewBox.maxY - previewBox.minY)}%`,
+            }}
+            className="absolute border-2 border-blue-600 bg-blue-500/20 dark:border-blue-400 dark:bg-blue-400/25 pointer-events-none rounded flex items-center justify-center"
+          >
+            <span className="w-3 h-3 rounded-full bg-red-600 border-2 border-white shadow-sm" />
+            <span
+              className={`absolute left-0 px-1.5 py-0.5 text-[11px] font-medium bg-blue-600 text-white rounded whitespace-nowrap shadow-sm ${
+                previewBox.minY < 12 ? 'top-full mt-1' : '-top-6'
+              }`}
+            >
+              {target.label || 'Điểm đáp án đúng'}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
-        <span>
+        <span className={editable && !hasTarget ? 'text-amber-700 dark:text-amber-400 font-medium' : ''}>
           {editable
-            ? 'Kéo chuột trực tiếp trên ảnh mẫu để khoanh vùng tọa độ phần trăm.'
-            : 'Vùng đáp án được cấu hình theo tọa độ phần trăm (dung sai ±1.5%).'}
+            ? hasTarget
+              ? 'Nhấp vào điểm mới hoặc kéo chuột trên hình để chỉnh lại vùng đáp án.'
+              : 'Nhấp trực tiếp vào điểm đúng trên hình (hoặc kéo chuột khoanh vùng rộng hơn).'
+            : 'Điểm đáp án đúng đã lưu (chấm điểm với dung sai ±1.5%).'}
         </span>
-        <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300">
-          X: {target.minX}%–{target.maxX}% · Y: {target.minY}%–{target.maxY}%
-        </span>
+        {hasTarget && (
+          <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300">
+            Tâm: ({center.x}%, {center.y}%) · Vùng: {target.minX}%–{target.maxX}% × {target.minY}%–{target.maxY}%
+          </span>
+        )}
       </div>
     </div>
   );

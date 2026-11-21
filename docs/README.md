@@ -59,16 +59,17 @@ npx --yes tsx --test src/utils/ic3Rules.test.ts
 │   ├── data/seedData.ts               # SUPABASE_SCHEMA_SQL (17 bảng) + createSeedDatabase()
 │   ├── utils/
 │   │   ├── api.ts                     # HTTP client gọi REST API (/api/*) tới server.ts
-│   │   ├── ic3Rules.ts                # Pure domain logic (chấm điểm, mật khẩu VN, CSV, sắp xếp, Supabase payload, loading format)
-│   │   ├── ic3Rules.test.ts           # 11 unit tests cho ic3Rules.ts
-│   │   └── supabaseClient.ts          # Kết nối Supabase, pub/sub trạng thái loading, đồng bộ 2 chiều & CRUD live
+│   │   ├── ic3Rules.ts                # Pure domain logic (chấm điểm, mật khẩu VN, CSV, sắp xếp, clipboard ảnh, vòng đời Storage, toast variant, Supabase payload, loading format)
+│   │   ├── ic3Rules.test.ts           # 17 unit tests cho ic3Rules.ts
+│   │   └── supabaseClient.ts          # Kết nối Supabase, Storage upload/delete, pub/sub trạng thái loading, đồng bộ 2 chiều & CRUD live
 │   └── components/
 │       ├── AuthScreen.tsx             # Màn hình đăng nhập giáo viên & truy cập nhanh tài khoản mẫu
+│       ├── ToastContainer.tsx         # Hệ thống thông báo Toast nổi góc dưới bên phải (Success / Warning / Error / Info)
 │       ├── OverviewView.tsx           # Tab Tổng quan (KPI + tiến độ lớp + lượt nộp gần nhất)
 │       ├── SchoolsStudentsView.tsx    # Tab Trường, Lớp, Học sinh, CSV import, Reset MK, Phân quyền GV
 │       ├── QuestionBankView.tsx       # Tab Ngân hàng Câu hỏi (4 bước) & Bộ đề + đồng bộ Supabase
 │       ├── QuestionEditorModal.tsx    # Modal soạn/sửa 5 dạng câu hỏi IC3
-│       ├── HotspotCanvas.tsx          # Canvas SVG 4 mẫu giao diện + kéo thả khoanh vùng % Hotspot
+│       ├── HotspotCanvas.tsx          # Hiển thị ảnh câu hỏi tải lên theo đúng tỷ lệ & nhấp/kéo chọn điểm đúng Hotspot
 │       ├── ClassTasksView.tsx         # Tab Giao Bài tập Lớp & theo dõi mở khóa Giải lao
 │       ├── BattleControlView.tsx      # Tab Điều phối Thi đấu Realtime theo lớp
 │       ├── ReportsView.tsx            # Tab Thống kê, lịch sử nộp/thi đấu & xuất CSV Excel
@@ -98,6 +99,9 @@ npx --yes tsx --test src/utils/ic3Rules.test.ts
 - **Kiến trúc 4 tầng Ngân hàng Câu hỏi & Khóa ngoại SQL:** Chuẩn hóa phân cấp `ic3_modules` → `knowledge_categories` → `knowledge_parts` → `questions` (với `content_code` và `topic_order`), bổ sung composite `UNIQUE` và `FOREIGN KEY` (`ON UPDATE CASCADE ON DELETE RESTRICT`) để hiển thị liên kết rõ ràng trên Supabase Schema Visualizer.
 - **Đồng bộ 2 chiều Ngân hàng Câu hỏi:** Hỗ trợ đọc tự động khi mở app, kéo/đẩy thủ công, và tự động đồng bộ live mỗi khi thêm/sửa/xóa/đảo thứ tự Mô-đun, Nhóm, Phần, Câu hỏi, Bộ đề (tự động tạo bản ghi cha còn thiếu để không lỗi FK).
 - **Chọn nhiều & Thao tác hàng loạt câu hỏi:** Hỗ trợ chọn từng câu, chọn tất cả (kể cả trạng thái `indeterminate` khi đang lọc), tạo Bộ đề từ các câu không liên tục và xóa hàng loạt câu hỏi (kèm đồng bộ xóa trên Supabase và gỡ ID câu hỏi khỏi các Bộ đề liên quan).
+- **Câu hỏi Hotspot tải ảnh thật, dán `Ctrl + V` & Quản lý vòng đời Supabase Storage:** Cho phép giáo viên tải ảnh từ máy tính hoặc nhấn `Ctrl + V` để dán ảnh xem trước cục bộ, nhấp/khoanh trực tiếp điểm đúng trên ảnh theo tỷ lệ gốc, chỉ tải lên bucket `hotspot-images` khi bấm **Lưu Câu hỏi**, và tự động xóa ảnh cũ khỏi bucket khi đổi sang ảnh khác hoặc khi xóa câu hỏi (đơn lẻ/hàng loạt).
+- **Tinh gọn Form Soạn Câu hỏi & Gỡ bỏ Độ khó:** Khóa lựa chọn Mô-đun/Nhóm/Phần khi tạo mới câu hỏi trong Phần kiến thức; bỏ ô nhập Chủ đề kiến thức (tự lấy theo tên Phần trong CSDL) và Hướng dẫn ngắn (tự gán mặc định theo Dạng câu hỏi); gỡ bỏ hoàn toàn trường & bộ lọc `Độ khó` (`difficulty`) ở cả giao diện, API và Supabase SQL DDL.
+- **Hệ thống thông báo Toast góc dưới bên phải màn hình (`ToastContainer`):** Hiển thị nổi cố định ở góc dưới bên phải (`fixed bottom-5 right-5 z-[90]`), phân tách 4 trạng thái trực quan (`THÀNH CÔNG!`, `CẢNH BÁO!`, `LỖI THAO TÁC!`, `THÔNG BÁO!`) kèm icon tròn đặc trưng, xếp chồng tối đa 4 thông báo và tự đóng hoặc bấm `×` để đóng nhanh.
 - **Modal Loading toàn màn hình khi chờ Supabase:** Nâng cấp từ banner nhỏ sang Modal toàn màn hình (`z-[100]`, nền mờ khóa tương tác, hộp thoại chuẩn `role="dialog"`, `aria-modal="true"`) kết hợp cơ chế `trackSupabaseCall` tập trung và khóa nút bấm cục bộ trong lúc chờ phản hồi.
 
 ---
