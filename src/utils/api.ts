@@ -18,6 +18,26 @@ import type {
 
 export type SafeTeacher = Omit<AdminTeacher, 'password'>;
 
+export interface SupabaseSyncStatus {
+  configured: boolean;
+  ok: boolean;
+  error?: string;
+  count?: number;
+}
+
+export interface SupabaseConfigInput {
+  url?: string;
+  anonKey?: string;
+}
+
+function toSupabaseBody(config?: SupabaseConfigInput) {
+  if (!config?.url?.trim() || !config?.anonKey?.trim()) return {};
+  return {
+    supabaseUrl: config.url.trim(),
+    supabaseAnonKey: config.anonKey.trim(),
+  };
+}
+
 let memoryAuthToken: string | null = null;
 
 export function setAuthToken(token: string | null): void {
@@ -51,14 +71,23 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  async login(email: string, password: string) {
-    const result = await request<{ teacher: SafeTeacher; token: string }>(
-      '/api/auth/login',
-      {
-        method: 'POST',
-        body: JSON.stringify({ email, password }),
-      }
-    );
+  async login(
+    email: string,
+    password: string,
+    supabaseConfig?: SupabaseConfigInput
+  ) {
+    const result = await request<{
+      teacher: SafeTeacher;
+      token: string;
+      authSource?: 'supabase' | 'local';
+    }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        email,
+        password,
+        ...toSupabaseBody(supabaseConfig),
+      }),
+    });
     setAuthToken(result.token);
     return result;
   },
@@ -79,17 +108,23 @@ export const api = {
     );
   },
 
-  createTeacher(payload: {
-    fullName: string;
-    email: string;
-    password: string;
-    role: AdminRole;
-    status?: TeacherAccountStatus;
-  }) {
-    return request<SafeTeacher>('/api/teachers', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+  createTeacher(
+    payload: {
+      fullName: string;
+      email: string;
+      password: string;
+      role: AdminRole;
+      status?: TeacherAccountStatus;
+    },
+    supabaseConfig?: SupabaseConfigInput
+  ) {
+    return request<SafeTeacher & { supabaseSync?: SupabaseSyncStatus }>(
+      '/api/teachers',
+      {
+        method: 'POST',
+        body: JSON.stringify({ ...payload, ...toSupabaseBody(supabaseConfig) }),
+      }
+    );
   },
 
   updateTeacher(
@@ -100,17 +135,49 @@ export const api = {
       password?: string;
       role?: AdminRole;
       status?: TeacherAccountStatus;
-    }
+    },
+    supabaseConfig?: SupabaseConfigInput
   ) {
-    return request<SafeTeacher>(`/api/teachers/${userId}`, {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    });
+    return request<SafeTeacher & { supabaseSync?: SupabaseSyncStatus }>(
+      `/api/teachers/${userId}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ ...payload, ...toSupabaseBody(supabaseConfig) }),
+      }
+    );
   },
 
-  deleteTeacher(userId: string) {
-    return request<{ ok: boolean }>(`/api/teachers/${userId}`, {
-      method: 'DELETE',
+  deleteTeacher(userId: string, supabaseConfig?: SupabaseConfigInput) {
+    return request<{ ok: boolean; supabaseSync?: SupabaseSyncStatus }>(
+      `/api/teachers/${userId}`,
+      {
+        method: 'DELETE',
+        body: JSON.stringify(toSupabaseBody(supabaseConfig)),
+      }
+    );
+  },
+
+  syncTeachersToSupabase(supabaseConfig?: SupabaseConfigInput) {
+    return request<{ ok: boolean; count: number; message: string }>(
+      '/api/teachers/sync-supabase',
+      {
+        method: 'POST',
+        body: JSON.stringify(toSupabaseBody(supabaseConfig)),
+      }
+    );
+  },
+
+  pullTeachersFromSupabase(supabaseConfig?: SupabaseConfigInput) {
+    return request<{
+      ok: boolean;
+      addedCount: number;
+      updatedCount: number;
+      total: number;
+      teachers: SafeTeacher[];
+      message: string;
+    }>('/api/teachers/pull-supabase', {
+      method: 'POST',
+      body: JSON.stringify(toSupabaseBody(supabaseConfig)),
     });
   },
 

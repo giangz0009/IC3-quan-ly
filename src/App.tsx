@@ -38,6 +38,7 @@ import {
   fetchQuestionBankFromSupabase,
   getActiveSupabaseTasks,
   getQuestionBankSupabaseEnabled,
+  getSavedSupabaseSettings,
   subscribeSupabaseActivity,
 } from './utils/supabaseClient';
 
@@ -183,7 +184,7 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     if (params.get('autostart') === '1') {
       api
-        .login('admin@ic3master.edu.vn', 'admin123')
+        .login('admin@ic3master.edu.vn', 'admin123', getSavedSupabaseSettings())
         .then(({ teacher: t }) => {
           setTeacher(t);
         })
@@ -191,9 +192,15 @@ export default function App() {
     }
   }, [teacher, refreshData]);
 
-  function handleAuthenticated(loggedTeacher: SafeTeacher) {
+  function handleAuthenticated(
+    loggedTeacher: SafeTeacher,
+    authSource?: 'supabase' | 'local'
+  ) {
     setActiveTab('overview');
     setTeacher(loggedTeacher);
+    if (authSource === 'supabase') {
+      notify('Đã đăng nhập và đồng bộ thông tin tài khoản từ Supabase.');
+    }
   }
 
   function handleLogout() {
@@ -446,6 +453,11 @@ export default function App() {
                   currentTeacher={teacher}
                   onRefresh={refreshData}
                   onNotify={notify}
+                  onOpenSupabase={
+                    permissions.canManageSupabase
+                      ? () => setActiveTab('supabase')
+                      : undefined
+                  }
                 />
               )}
               {effectiveTab === 'questions' && (
@@ -483,7 +495,7 @@ export default function App() {
               )}
               {effectiveTab === 'supabase' && permissions.canManageSupabase && (
                 <SupabaseView
-                  db={{ ...db, teachers: [] }}
+                  db={db}
                   onRefresh={refreshData}
                   onNotify={notify}
                 />

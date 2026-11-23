@@ -150,6 +150,13 @@ async function trackSupabaseCall<T>(
   }
 }
 
+export function runTrackedSupabaseActivity<T>(
+  label: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  return trackSupabaseCall(label, fn);
+}
+
 export function createBrowserSupabaseClient(
   settings: SupabaseSettings
 ): SupabaseClient | null {
@@ -210,6 +217,12 @@ export async function testSupabaseConnection(
       label: 'Học sinh',
       selectCols: 'id',
       localCount: localDb?.students.length ?? null,
+    },
+    {
+      table: 'admin_teachers',
+      label: 'Giáo viên & Phân quyền',
+      selectCols: 'user_id',
+      localCount: localDb?.teachers?.length ?? null,
     },
     {
       table: 'ic3_modules',

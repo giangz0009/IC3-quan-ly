@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  Database,
+  DownloadCloud,
   Eye,
   Lock,
   Pencil,
@@ -9,6 +11,7 @@ import {
   ShieldCheck,
   Trash2,
   Unlock,
+  UploadCloud,
   UserPlus,
   X,
   XCircle,
@@ -31,12 +34,18 @@ import {
   summarizeTeachersByRole,
   summarizeTeacherStatuses,
 } from '../utils/ic3Rules';
+import {
+  getSavedSupabaseSettings,
+  isSupabaseConfigured,
+  runTrackedSupabaseActivity,
+} from '../utils/supabaseClient';
 
 interface TeacherManagementViewProps {
   db: Omit<AdminDatabase, 'teachers'> & { teachers: SafeTeacher[] };
   currentTeacher: SafeTeacher;
   onRefresh: () => Promise<void>;
   onNotify: (msg: string, isError?: boolean) => void;
+  onOpenSupabase?: () => void;
 }
 
 export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
@@ -44,6 +53,7 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
   currentTeacher,
   onRefresh,
   onNotify,
+  onOpenSupabase,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | AdminRole>('all');
@@ -80,6 +90,7 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
   );
 
   const [busy, setBusy] = useState(false);
+  const supabaseConfigured = isSupabaseConfigured();
 
   const roleSummary = useMemo(
     () => summarizeTeachersByRole(db.teachers),
@@ -100,10 +111,21 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
     e.preventDefault();
     setBusy(true);
     try {
-      await api.createTeacher({
-        ...createForm,
-        status: 'active',
-      });
+      const settings = getSavedSupabaseSettings();
+      const exec = () =>
+        api.createTeacher(
+          {
+            ...createForm,
+            status: 'active',
+          },
+          settings
+        );
+      const created = supabaseConfigured
+        ? await runTrackedSupabaseActivity(
+            'Đang cấp tài khoản & đồng bộ lên Supabase...',
+            exec
+          )
+        : await exec();
       await onRefresh();
       setShowCreateModal(false);
       setCreateForm({
@@ -112,7 +134,16 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
         password: '',
         role: 'teacher_lv1',
       });
-      onNotify('Đã cấp tài khoản giáo viên mới.');
+      if (created.supabaseSync?.configured && !created.supabaseSync.ok) {
+        onNotify(
+          `Đã cấp tài khoản giáo viên cục bộ nhưng đồng bộ Supabase lỗi: ${created.supabaseSync.error}`,
+          true
+        );
+      } else if (created.supabaseSync?.configured && created.supabaseSync.ok) {
+        onNotify('Đã cấp tài khoản giáo viên mới và đồng bộ lên Supabase.');
+      } else {
+        onNotify('Đã cấp tài khoản giáo viên mới.');
+      }
     } catch (err) {
       onNotify(
         err instanceof Error ? err.message : 'Lỗi cấp tài khoản giáo viên.',
@@ -139,16 +170,34 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
     if (!editingTeacher) return;
     setBusy(true);
     try {
-      await api.updateTeacher(editingTeacher.userId, {
+      const settings = getSavedSupabaseSettings();
+      const payload = {
         fullName: editForm.fullName,
         email: editForm.email,
         role: editForm.role,
         status: editForm.status,
         ...(editForm.password.trim() ? { password: editForm.password } : {}),
-      });
+      };
+      const exec = () =>
+        api.updateTeacher(editingTeacher.userId, payload, settings);
+      const updated = supabaseConfigured
+        ? await runTrackedSupabaseActivity(
+            'Đang cập nhật giáo viên lên Supabase...',
+            exec
+          )
+        : await exec();
       await onRefresh();
       setEditingTeacher(null);
-      onNotify('Đã cập nhật thông tin và phân quyền giáo viên.');
+      if (updated.supabaseSync?.configured && !updated.supabaseSync.ok) {
+        onNotify(
+          `Đã cập nhật cục bộ nhưng đồng bộ Supabase lỗi: ${updated.supabaseSync.error}`,
+          true
+        );
+      } else if (updated.supabaseSync?.configured && updated.supabaseSync.ok) {
+        onNotify('Đã cập nhật thông tin, phân quyền và đồng bộ lên Supabase.');
+      } else {
+        onNotify('Đã cập nhật thông tin và phân quyền giáo viên.');
+      }
     } catch (err) {
       onNotify(
         err instanceof Error ? err.message : 'Lỗi cập nhật thông tin giáo viên.',
@@ -165,13 +214,28 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
       currentStatus === 'active' ? 'locked' : 'active';
     setBusy(true);
     try {
-      await api.updateTeacher(teacher.userId, { status: nextStatus });
+      const settings = getSavedSupabaseSettings();
+      const exec = () =>
+        api.updateTeacher(teacher.userId, { status: nextStatus }, settings);
+      const updated = supabaseConfigured
+        ? await runTrackedSupabaseActivity(
+            'Đang cập nhật trạng thái giáo viên lên Supabase...',
+            exec
+          )
+        : await exec();
       await onRefresh();
-      onNotify(
-        nextStatus === 'locked'
-          ? `Đã tạm khóa tài khoản ${teacher.fullName}.`
-          : `Đã mở khóa tài khoản ${teacher.fullName}.`
-      );
+      if (updated.supabaseSync?.configured && !updated.supabaseSync.ok) {
+        onNotify(
+          `Đã đổi trạng thái cục bộ nhưng đồng bộ Supabase lỗi: ${updated.supabaseSync.error}`,
+          true
+        );
+      } else {
+        onNotify(
+          nextStatus === 'locked'
+            ? `Đã tạm khóa tài khoản ${teacher.fullName}.`
+            : `Đã mở khóa tài khoản ${teacher.fullName}.`
+        );
+      }
     } catch (err) {
       onNotify(
         err instanceof Error
@@ -189,13 +253,70 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
     setBusy(true);
     try {
       const targetName = deletingTeacher.fullName;
-      await api.deleteTeacher(deletingTeacher.userId);
+      const settings = getSavedSupabaseSettings();
+      const exec = () => api.deleteTeacher(deletingTeacher.userId, settings);
+      const deleted = supabaseConfigured
+        ? await runTrackedSupabaseActivity(
+            'Đang xóa giáo viên trên Supabase...',
+            exec
+          )
+        : await exec();
       await onRefresh();
       setDeletingTeacher(null);
-      onNotify(`Đã xóa tài khoản ${targetName}.`);
+      if (deleted.supabaseSync?.configured && !deleted.supabaseSync.ok) {
+        onNotify(
+          `Đã xóa tài khoản ${targetName} cục bộ nhưng xóa trên Supabase lỗi: ${deleted.supabaseSync.error}`,
+          true
+        );
+      } else if (deleted.supabaseSync?.configured && deleted.supabaseSync.ok) {
+        onNotify(`Đã xóa tài khoản ${targetName} khỏi hệ thống và Supabase.`);
+      } else {
+        onNotify(`Đã xóa tài khoản ${targetName}.`);
+      }
     } catch (err) {
       onNotify(
         err instanceof Error ? err.message : 'Không thể xóa tài khoản giáo viên.',
+        true
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handlePushTeachersToSupabase() {
+    setBusy(true);
+    try {
+      const res = await runTrackedSupabaseActivity(
+        'Đang đẩy danh sách giáo viên lên Supabase...',
+        () => api.syncTeachersToSupabase(getSavedSupabaseSettings())
+      );
+      onNotify(res.message);
+    } catch (err) {
+      onNotify(
+        err instanceof Error
+          ? err.message
+          : 'Không thể đẩy danh sách giáo viên lên Supabase.',
+        true
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handlePullTeachersFromSupabase() {
+    setBusy(true);
+    try {
+      const res = await runTrackedSupabaseActivity(
+        'Đang lấy danh sách giáo viên từ Supabase...',
+        () => api.pullTeachersFromSupabase(getSavedSupabaseSettings())
+      );
+      await onRefresh();
+      onNotify(res.message);
+    } catch (err) {
+      onNotify(
+        err instanceof Error
+          ? err.message
+          : 'Không thể lấy danh sách giáo viên từ Supabase.',
         true
       );
     } finally {
@@ -311,14 +432,49 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
               {filteredTeachers.length} / {db.teachers.length} tài khoản
             </span>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <UserPlus className="w-3.5 h-3.5" />
-            <span>Cấp tài khoản</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {supabaseConfigured ? (
+              <>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={handlePullTeachersFromSupabase}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-950 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <DownloadCloud className="w-3.5 h-3.5" />
+                  <span>Kéo từ Supabase</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={handlePushTeachersToSupabase}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <UploadCloud className="w-3.5 h-3.5" />
+                  <span>Đẩy lên Supabase</span>
+                </button>
+              </>
+            ) : (
+              onOpenSupabase && (
+                <button
+                  type="button"
+                  onClick={onOpenSupabase}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  <span>Kết nối Supabase</span>
+                </button>
+              )
+            )}
+            <button
+              type="button"
+              onClick={() => setShowCreateModal(true)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Cấp tài khoản</span>
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">

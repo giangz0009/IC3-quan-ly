@@ -1,7 +1,7 @@
 # Tính năng 08: Kết nối, Đồng bộ & Modal Loading Supabase
 
 **Trạng thái:** Đã hoàn thành (hỗ trợ Modal toàn màn hình & theo dõi tác vụ tập trung)  
-**Cập nhật lần cuối:** 2026-11-20
+**Cập nhật lần cuối:** 2026-11-23
 
 ---
 
@@ -9,11 +9,11 @@
 
 | Lớp | File | Thành phần / Hàm chính |
 |---|---|---|
-| Frontend (Tab) | `src/components/SupabaseView.tsx` | Form URL/Anon Key, bật/tắt đồng bộ 2 chiều QB, các nút Kiểm tra / Đẩy lên / Kéo QB / Đọc thử 8 dòng, khung SQL DDL + bảng trạng thái 14 bảng |
+| Frontend (Tab) | `src/components/SupabaseView.tsx` | Form URL/Anon Key, bật/tắt đồng bộ 2 chiều QB, các nút Kiểm tra / Đẩy lên / Kéo QB / Lấy Giáo viên / Đọc thử 8 dòng, khung SQL DDL + bảng trạng thái 15 bảng |
 | Frontend (Global Modal) | `src/App.tsx` | Lắng nghe `subscribeSupabaseActivity`, quản lý `syncingStartupSupabase`, render Modal Loading toàn màn hình `z-[100]` (`[data-testid="supabase-loading-modal"]`) |
-| Supabase Client | `src/utils/supabaseClient.ts` | Quản lý cấu hình `localStorage`, singleton `createBrowserSupabaseClient`, hệ thống `trackSupabaseCall` pub/sub, `uploadHotspotImageToSupabase` và toàn bộ hàm gọi Supabase |
-| Logic thuần | `src/utils/ic3Rules.ts` | `formatSupabaseLoadingStatus()`, `buildQuestionBankSupabasePayload()` |
-| Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test định dạng thông báo nhiều tác vụ loading (`formatSupabaseLoadingStatus`) & dựng payload đồng bộ |
+| Supabase Client | `src/utils/supabaseClient.ts` | Quản lý cấu hình `localStorage`, singleton `createBrowserSupabaseClient`, hệ thống `trackSupabaseCall` / `runTrackedSupabaseActivity` pub/sub, `uploadHotspotImageToSupabase` và toàn bộ hàm gọi Supabase |
+| Logic thuần | `src/utils/ic3Rules.ts` | `formatSupabaseLoadingStatus()`, `buildQuestionBankSupabasePayload()`, `buildAdminTeachersSupabasePayload()`, `mergeRemoteTeachersWithLocal()` |
+| Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test định dạng thông báo nhiều tác vụ loading (`formatSupabaseLoadingStatus`), dựng payload đồng bộ QB & Giáo viên |
 | SQL DDL | `src/data/seedData.ts` | Hằng số `SUPABASE_SCHEMA_SQL` (17 bảng + FK + Migration nâng cấp + RLS + Storage bucket `hotspot-images`) |
 
 ---
@@ -29,15 +29,17 @@
 
 ### 2.2. Các Tác vụ Kết nối & Đồng bộ tại `SupabaseView`
 1. **Kiểm tra kết nối & Lược đồ (`testSupabaseConnection`):**
-   - Đo độ trễ (ms) và thực hiện `SELECT ... { count: 'exact', head: true }` song song trên **14 bảng cốt lõi** (`schools`, `classes`, `students`, `ic3_modules`, `knowledge_categories`, `knowledge_parts`, `questions`, `question_sets`, `class_task_configs`, `class_tasks`, `student_task_submissions`, `student_break_states`, `class_battle_configs`, `battle_rooms`).
+   - Đo độ trễ (ms) và thực hiện `SELECT ... { count: 'exact', head: true }` song song trên **15 bảng cốt lõi** (`schools`, `classes`, `students`, `admin_teachers`, `ic3_modules`, `knowledge_categories`, `knowledge_parts`, `questions`, `question_sets`, `class_task_configs`, `class_tasks`, `student_task_submissions`, `student_break_states`, `class_battle_configs`, `battle_rooms`).
    - Hiển thị bảng đối chiếu số dòng **Cục bộ** vs **Trên Supabase** và lỗi chi tiết (nếu thiếu bảng hoặc thiếu quyền RLS).
-2. **Đồng bộ Dữ liệu lên Supabase (`syncLocalDatabaseToSupabase`):**
-   - Upsert dữ liệu từ Local DB lên Supabase theo đúng thứ tự phụ thuộc khóa ngoại: `schools` → `classes` → `students` → `ic3_modules` → `knowledge_categories` → `knowledge_parts` → `questions` → `question_sets` → `class_task_configs` → `class_tasks` → `student_break_states` → `class_battle_configs`.
+2. **Đồng bộ Dữ liệu lên Supabase (`syncLocalDatabaseToSupabase` + `api.syncTeachersToSupabase`):**
+   - Upsert dữ liệu từ Local DB lên Supabase theo đúng thứ tự phụ thuộc khóa ngoại: `schools` → `classes` → `students` → `ic3_modules` → `knowledge_categories` → `knowledge_parts` → `questions` → `question_sets` → `class_task_configs` → `class_tasks` → `student_break_states` → `class_battle_configs`, đồng thời gọi server đồng bộ bảng `admin_teachers` (bao gồm `password_hash` an toàn).
 3. **Lấy Ngân hàng Câu hỏi từ Supabase (`fetchQuestionBankFromSupabase` → `api.importQuestionBankFromRemote`):**
    - Kéo 5 bảng (`ic3_modules`, `knowledge_categories`, `knowledge_parts`, `questions`, `question_sets`) về Local DB.
    - Kiểm tra rõ ràng lỗi truy vấn (thiếu bảng/lỗi RLS) so với trường hợp bảng thực sự trống 0 dòng để thông báo chính xác nguyên nhân cho giáo viên.
-4. **Đọc thử 8 dòng (`fetchSupabaseSampleQuestions`):** Truy vấn trực tiếp 8 dòng từ `knowledge_parts` và 8 dòng từ `questions` để xem trước dữ liệu thực trên Supabase.
-5. **Sao chép SQL DDL (`SUPABASE_SCHEMA_SQL`):** Hiển thị và cho phép sao chép toàn bộ kịch bản SQL chuẩn hóa 17 bảng (kèm FK 4 tầng, RLS policy cho `anon, authenticated`, và khởi tạo bucket Supabase Storage `hotspot-images`) để dán vào Supabase SQL Editor.
+4. **Lấy Giáo viên từ Supabase (`api.pullTeachersFromSupabase`):**
+   - Kéo danh sách tài khoản giáo viên từ `public.admin_teachers` qua `server.ts` và hợp nhất an toàn vào Local DB mà không làm lộ `password_hash` xuống trình duyệt.
+5. **Đọc thử 8 dòng (`fetchSupabaseSampleQuestions`):** Truy vấn trực tiếp 8 dòng từ `knowledge_parts` và 8 dòng từ `questions` để xem trước dữ liệu thực trên Supabase.
+6. **Sao chép SQL DDL (`SUPABASE_SCHEMA_SQL`):** Hiển thị và cho phép sao chép toàn bộ kịch bản SQL chuẩn hóa 17 bảng (kèm FK 4 tầng, RLS policy cho `anon, authenticated`, và khởi tạo bucket Supabase Storage `hotspot-images`) để dán vào Supabase SQL Editor.
 
 ### 2.3. Hệ thống Modal Loading Toàn màn hình (`App.tsx` + `supabaseClient.ts`)
 - Mọi lời gọi API Supabase trong `supabaseClient.ts` đều đi qua hàm bọc tập trung `trackSupabaseCall(label, fn)`:
@@ -70,6 +72,7 @@
 
 ## 5. Nhật ký thay đổi
 
+- **2026-11-23 (Đồng bộ `admin_teachers`):** Bổ sung `admin_teachers` vào danh sách kiểm tra 15 bảng của `testSupabaseConnection`, đồng bộ `admin_teachers` qua `server.ts` khi bấm *"Đồng bộ Dữ liệu lên Supabase"*, thêm nút *"Lấy Giáo viên từ Supabase"* và xuất `runTrackedSupabaseActivity` để các thao tác đồng bộ giáo viên đi qua server vẫn hiển thị Modal Loading toàn màn hình.
 - **2026-11-20 (Bổ sung Supabase Storage cho Hotspot):** Thêm bucket công khai `hotspot-images` cùng policy RLS trên `storage.objects` vào `SUPABASE_SCHEMA_SQL`; hàm `uploadHotspotImageToSupabase` (chỉ gọi khi giáo viên bấm **Lưu Câu hỏi** và form hợp lệ) và `deleteHotspotImagesFromSupabase` (tự động xóa ảnh cũ khỏi bucket khi đổi ảnh hoặc xóa câu hỏi) đều được bọc qua `trackSupabaseCall`.
 - **2026-11-20:** Chuyển đổi cơ chế thông báo chờ Supabase sang **Modal toàn màn hình (`z-[100]`)** dùng chung toàn app qua `trackSupabaseCall`, kết hợp khóa nút cục bộ tránh bấm trùng.
 - **Trước 2026-11-20:** Hoàn thiện kịch bản SQL 17 bảng kèm FK 4 tầng + RLS, bổ sung nút kiểm tra 14 bảng, đọc thử 8 dòng và phân biệt thông báo lỗi RLS với bảng rỗng.

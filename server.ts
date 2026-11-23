@@ -3,13 +3,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createServer as createViteServer } from 'vite';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { createSeedDatabase } from './src/data/seedData';
 import {
+  buildAdminTeachersSupabasePayload,
   calculateIC3Score,
   canDeleteOrDemoteMaster,
   getDefaultInstructionForQuestionType,
   getNextTopicOrder,
+  isSafeRemoteSupabaseUrl,
   isStudentBreakUnlocked,
+  mergeRemoteTeachersWithLocal,
   normalizeAdminRole,
   normalizeTeacherStatus,
   normalizeVietnamesePassword,
@@ -236,6 +240,258 @@ function makeId(prefix: string): string {
   return `${prefix}_${crypto.randomBytes(4).toString('hex')}`;
 }
 
+interface SupabaseSyncStatus {
+  configured: boolean;
+  ok: boolean;
+  error?: string;
+  count?: number;
+}
+
+function resolveSupabaseClient(input?: {
+  supabaseUrl?: unknown;
+  supabaseAnonKey?: unknown;
+}): { client: SupabaseClient | null; invalidReason?: string } {
+  const bodyUrl =
+    typeof input?.supabaseUrl === 'string' ? input.supabaseUrl.trim() : '';
+  const bodyKey =
+    typeof input?.supabaseAnonKey === 'string'
+      ? input.supabaseAnonKey.trim()
+      : '';
+  const envUrl = (process.env.SUPABASE_URL || '').trim();
+  const envKey = (process.env.SUPABASE_ANON_KEY || '').trim();
+
+  const url = bodyUrl || envUrl;
+  const anonKey = bodyKey || envKey;
+
+  if (!url || !anonKey) {
+    return { client: null };
+  }
+  if (!isSafeRemoteSupabaseUrl(url)) {
+    return {
+      client: null,
+      invalidReason:
+        'Supabase Project URL không hợp lệ hoặc không thuộc máy chủ công khai được phép kết nối.',
+    };
+  }
+  try {
+    const client = createClient(url, anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    return { client };
+  } catch {
+    return {
+      client: null,
+      invalidReason: 'Không thể khởi tạo kết nối tới Supabase.',
+    };
+  }
+}
+
+async function syncTeachersToSupabaseServer(
+  client: SupabaseClient,
+  teachers: AdminTeacher[]
+): Promise<SupabaseSyncStatus> {
+  const payload = buildAdminTeachersSupabasePayload(teachers);
+  if (payload.length === 0) {
+    return { configured: true, ok: true, count: 0 };
+  }
+  try {
+    const { data: existingRows, error: selectErr } = await client
+      .from('admin_teachers')
+      .select('user_id, email');
+    if (selectErr) {
+      return { configured: true, ok: false, error: selectErr.message };
+    }
+
+    const existingByUserId = new Map<string, string>();
+    const existingByEmail = new Map<string, string>();
+    for (const row of existingRows ?? []) {
+      const uid = String(row.user_id ?? '').trim();
+      const em = String(row.email ?? '').trim().toLowerCase();
+      if (uid) existingByUserId.set(uid, em);
+      if (em && uid) existingByEmail.set(em, uid);
+    }
+
+    const usedTargetIds = new Set<string>();
+    const alignedPayload = payload.map((item) => {
+      let targetUserId = item.user_id;
+      const emailOwnerId = existingByEmail.get(item.email);
+      if (
+        emailOwnerId &&
+        !existingByUserId.has(item.user_id) &&
+        !usedTargetIds.has(emailOwnerId)
+      ) {
+        targetUserId = emailOwnerId;
+      }
+      usedTargetIds.add(targetUserId);
+      return {
+        ...item,
+        user_id: targetUserId,
+      };
+    });
+
+    const { error: upsertErr } = await client
+      .from('admin_teachers')
+      .upsert(alignedPayload, { onConflict: 'user_id' });
+    if (upsertErr) {
+      return { configured: true, ok: false, error: upsertErr.message };
+    }
+    return { configured: true, ok: true, count: alignedPayload.length };
+  } catch (err) {
+    return {
+      configured: true,
+      ok: false,
+      error: err instanceof Error ? err.message : 'Lỗi đồng bộ giáo viên lên Supabase.',
+    };
+  }
+}
+
+async function upsertSingleTeacherOnSupabaseServer(
+  client: SupabaseClient,
+  teacher: AdminTeacher,
+  previousEmail?: string
+): Promise<SupabaseSyncStatus> {
+  try {
+    const { data: existingRows, error: selectErr } = await client
+      .from('admin_teachers')
+      .select('user_id, email');
+    if (selectErr) {
+      return { configured: true, ok: false, error: selectErr.message };
+    }
+
+    const cleanEmail = teacher.email.trim().toLowerCase();
+    const prevCleanEmail = previousEmail?.trim().toLowerCase();
+
+    const matchedById = (existingRows ?? []).find(
+      (r) => String(r.user_id ?? '').trim() === teacher.userId
+    );
+    const matchedByPrevEmail = prevCleanEmail
+      ? (existingRows ?? []).find(
+          (r) => String(r.email ?? '').trim().toLowerCase() === prevCleanEmail
+        )
+      : undefined;
+    const matchedByEmail = (existingRows ?? []).find(
+      (r) => String(r.email ?? '').trim().toLowerCase() === cleanEmail
+    );
+
+    const targetUserId = String(
+      matchedById?.user_id ??
+        matchedByPrevEmail?.user_id ??
+        matchedByEmail?.user_id ??
+        teacher.userId
+    ).trim();
+
+    if (
+      matchedByEmail &&
+      String(matchedByEmail.user_id ?? '').trim() !== targetUserId
+    ) {
+      return {
+        configured: true,
+        ok: false,
+        error: `Email ${cleanEmail} đã thuộc tài khoản khác trên Supabase.`,
+      };
+    }
+
+    const row = buildAdminTeachersSupabasePayload([teacher])[0];
+    if (!row) {
+      return { configured: true, ok: false, error: 'Dữ liệu giáo viên không hợp lệ.' };
+    }
+
+    const { error: upsertErr } = await client
+      .from('admin_teachers')
+      .upsert({ ...row, user_id: targetUserId }, { onConflict: 'user_id' });
+    if (upsertErr) {
+      return { configured: true, ok: false, error: upsertErr.message };
+    }
+    return { configured: true, ok: true, count: 1 };
+  } catch (err) {
+    return {
+      configured: true,
+      ok: false,
+      error: err instanceof Error ? err.message : 'Lỗi cập nhật giáo viên trên Supabase.',
+    };
+  }
+}
+
+async function deleteTeacherOnSupabaseServer(
+  client: SupabaseClient,
+  teacher: Pick<AdminTeacher, 'userId' | 'email'>
+): Promise<SupabaseSyncStatus> {
+  try {
+    const { error: idErr } = await client
+      .from('admin_teachers')
+      .delete()
+      .eq('user_id', teacher.userId);
+    if (idErr) {
+      return { configured: true, ok: false, error: idErr.message };
+    }
+    const cleanEmail = teacher.email.trim().toLowerCase();
+    if (cleanEmail) {
+      const { error: emailErr } = await client
+        .from('admin_teachers')
+        .delete()
+        .eq('email', cleanEmail);
+      if (emailErr) {
+        return { configured: true, ok: false, error: emailErr.message };
+      }
+    }
+    return { configured: true, ok: true, count: 1 };
+  } catch (err) {
+    return {
+      configured: true,
+      ok: false,
+      error: err instanceof Error ? err.message : 'Lỗi xóa giáo viên trên Supabase.',
+    };
+  }
+}
+
+function upsertRemoteTeacherIntoLocalDb(
+  remoteRow: Record<string, unknown>,
+  verifiedPlainPassword?: string
+): AdminTeacher | null {
+  const email = String(remoteRow.email ?? '').trim().toLowerCase();
+  const userId = String(remoteRow.user_id ?? '').trim();
+  if (!email || !userId) return null;
+
+  const remoteHash =
+    typeof remoteRow.password_hash === 'string'
+      ? remoteRow.password_hash.trim()
+      : '';
+  const idx = db.teachers.findIndex(
+    (t) => t.userId === userId || t.email.trim().toLowerCase() === email
+  );
+  const existing = idx >= 0 ? db.teachers[idx] : undefined;
+  const nextPassword = remoteHash
+    ? hashTeacherPassword(remoteHash)
+    : verifiedPlainPassword
+      ? hashTeacherPassword(verifiedPlainPassword)
+      : existing?.password || '';
+
+  const nextTeacher: AdminTeacher = {
+    userId: existing?.userId || userId,
+    fullName:
+      String(remoteRow.full_name ?? existing?.fullName ?? email).trim() || email,
+    email,
+    password: nextPassword,
+    role: normalizeAdminRole(
+      typeof remoteRow.role === 'string' ? remoteRow.role : existing?.role
+    ),
+    status: normalizeTeacherStatus(
+      typeof remoteRow.status === 'string' ? remoteRow.status : existing?.status
+    ),
+    createdAt: String(
+      remoteRow.created_at ?? existing?.createdAt ?? new Date().toISOString()
+    ),
+  };
+
+  if (idx >= 0) {
+    db.teachers[idx] = nextTeacher;
+  } else {
+    db.teachers.push(nextTeacher);
+  }
+  saveDb();
+  return nextTeacher;
+}
+
 interface AuthedRequest extends express.Request {
   authTeacher?: Omit<AdminTeacher, 'password'>;
   authToken?: string;
@@ -302,14 +558,154 @@ async function startServer() {
   });
 
   // --- Auth & Teachers ---
-  app.post('/api/auth/login', (req, res) => {
-    const { email, password } = req.body ?? {};
+  app.post('/api/auth/login', async (req, res) => {
+    const { email, password, supabaseUrl, supabaseAnonKey } = req.body ?? {};
     if (typeof email !== 'string' || typeof password !== 'string') {
       return res.status(400).json({ error: 'Vui lòng nhập email và mật khẩu.' });
     }
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password) {
+      return res.status(400).json({ error: 'Vui lòng nhập đầy đủ email và mật khẩu.' });
+    }
+
+    const { client: sbClient } = resolveSupabaseClient({
+      supabaseUrl,
+      supabaseAnonKey,
+    });
+
+    if (sbClient) {
+      try {
+        const escapedPattern = cleanEmail.replace(/[\\%_]/g, '\\$&');
+        const { data: remoteRow, error: remoteErr } = await sbClient
+          .from('admin_teachers')
+          .select('user_id, full_name, email, password_hash, role, status, created_at')
+          .ilike('email', escapedPattern)
+          .maybeSingle();
+
+        if (!remoteErr && remoteRow) {
+          const remoteHash =
+            typeof remoteRow.password_hash === 'string'
+              ? remoteRow.password_hash.trim()
+              : '';
+          let verified = remoteHash
+            ? verifyTeacherPassword(password, remoteHash)
+            : false;
+
+          if (!verified) {
+            const { data: authData, error: authErr } =
+              await sbClient.auth.signInWithPassword({
+                email: cleanEmail,
+                password,
+              });
+            if (!authErr && authData.user) {
+              verified = true;
+            }
+          }
+
+          if (!verified && !remoteHash) {
+            const localMatch = db.teachers.find(
+              (t) => t.email.trim().toLowerCase() === cleanEmail
+            );
+            if (localMatch && verifyTeacherPassword(password, localMatch.password)) {
+              verified = true;
+            }
+          }
+
+          if (!verified) {
+            return res
+              .status(401)
+              .json({ error: 'Email hoặc mật khẩu giáo viên không chính xác.' });
+          }
+
+          const synced = upsertRemoteTeacherIntoLocalDb(
+            remoteRow as Record<string, unknown>,
+            password
+          );
+          if (!synced) {
+            return res
+              .status(500)
+              .json({ error: 'Dữ liệu tài khoản giáo viên trên Supabase không hợp lệ.' });
+          }
+
+          const teacherStatus = normalizeTeacherStatus(synced.status);
+          if (teacherStatus === 'locked') {
+            return res.status(403).json({
+              error: 'Tài khoản này đang bị tạm khóa. Vui lòng liên hệ Giáo viên Master.',
+            });
+          }
+
+          const token = signSessionToken(synced.userId);
+          const { password: _pw, ...safeTeacher } = synced;
+          return res.json({
+            teacher: {
+              ...safeTeacher,
+              role: normalizeAdminRole(safeTeacher.role),
+              status: teacherStatus,
+            },
+            token,
+            authSource: 'supabase' as const,
+          });
+        }
+
+        // If row was not found by email, check Supabase Auth directly
+        const { data: authData, error: authErr } =
+          await sbClient.auth.signInWithPassword({
+            email: cleanEmail,
+            password,
+          });
+        if (!authErr && authData.user) {
+          const { data: byUidRow } = await sbClient
+            .from('admin_teachers')
+            .select('user_id, full_name, email, password_hash, role, status, created_at')
+            .eq('user_id', authData.user.id)
+            .maybeSingle();
+
+          const localFallback = db.teachers.find(
+            (t) => t.email.trim().toLowerCase() === cleanEmail
+          );
+          const mergedRow: Record<string, unknown> = byUidRow ?? {
+            user_id: localFallback?.userId || authData.user.id,
+            full_name:
+              (authData.user.user_metadata?.full_name as string | undefined) ||
+              localFallback?.fullName ||
+              cleanEmail,
+            email: authData.user.email || cleanEmail,
+            password_hash: '',
+            role: localFallback?.role || 'teacher_lv1',
+            status: localFallback?.status || 'active',
+            created_at: localFallback?.createdAt || new Date().toISOString(),
+          };
+
+          const synced = upsertRemoteTeacherIntoLocalDb(mergedRow, password);
+          if (synced) {
+            const teacherStatus = normalizeTeacherStatus(synced.status);
+            if (teacherStatus === 'locked') {
+              return res.status(403).json({
+                error:
+                  'Tài khoản này đang bị tạm khóa. Vui lòng liên hệ Giáo viên Master.',
+              });
+            }
+            const token = signSessionToken(synced.userId);
+            const { password: _pw, ...safeTeacher } = synced;
+            return res.json({
+              teacher: {
+                ...safeTeacher,
+                role: normalizeAdminRole(safeTeacher.role),
+                status: teacherStatus,
+              },
+              token,
+              authSource: 'supabase' as const,
+            });
+          }
+        }
+      } catch {
+        // Fallback smoothly to local DB if Supabase is temporarily unreachable
+      }
+    }
+
     const found = db.teachers.find(
       (t) =>
-        t.email.toLowerCase() === email.trim().toLowerCase() &&
+        t.email.toLowerCase() === cleanEmail &&
         verifyTeacherPassword(password, t.password)
     );
     if (!found) {
@@ -332,6 +728,7 @@ async function startServer() {
         status: teacherStatus,
       },
       token,
+      authSource: 'local' as const,
     });
   });
 
@@ -353,8 +750,85 @@ async function startServer() {
     });
   });
 
-  app.post('/api/teachers', requireRoles('master'), (req, res) => {
-    const { fullName, email, password, role, status } = req.body ?? {};
+  app.post('/api/teachers/sync-supabase', requireRoles('master'), async (req, res) => {
+    const { client, invalidReason } = resolveSupabaseClient(req.body ?? {});
+    if (!client) {
+      return res.status(400).json({
+        error:
+          invalidReason ||
+          'Chưa cấu hình Supabase URL và Anon Key hợp lệ để đồng bộ giáo viên.',
+      });
+    }
+    const syncRes = await syncTeachersToSupabaseServer(client, db.teachers);
+    if (!syncRes.ok) {
+      return res.status(502).json({
+        error: `Không thể đẩy danh sách giáo viên lên Supabase: ${syncRes.error}`,
+      });
+    }
+    return res.json({
+      ok: true,
+      count: syncRes.count ?? 0,
+      message: `Đã đồng bộ ${syncRes.count ?? 0} tài khoản giáo viên lên bảng public.admin_teachers của Supabase.`,
+    });
+  });
+
+  app.post('/api/teachers/pull-supabase', requireRoles('master'), async (req, res) => {
+    const { client, invalidReason } = resolveSupabaseClient(req.body ?? {});
+    if (!client) {
+      return res.status(400).json({
+        error:
+          invalidReason ||
+          'Chưa cấu hình Supabase URL và Anon Key hợp lệ để lấy danh sách giáo viên.',
+      });
+    }
+    const { data, error } = await client
+      .from('admin_teachers')
+      .select('user_id, full_name, email, password_hash, role, status, created_at')
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      return res.status(502).json({
+        error: `Không thể đọc bảng public.admin_teachers từ Supabase: ${error.message}`,
+      });
+    }
+    const remoteRows = Array.isArray(data)
+      ? (data as Array<Record<string, unknown>>)
+      : [];
+    if (remoteRows.length === 0) {
+      return res.json({
+        ok: true,
+        addedCount: 0,
+        updatedCount: 0,
+        total: db.teachers.length,
+        teachers: sanitizeTeachers(db.teachers),
+        message:
+          'Bảng public.admin_teachers trên Supabase hiện đang trống (0 dòng).',
+      });
+    }
+
+    const { merged, addedCount, updatedCount } = mergeRemoteTeachersWithLocal(
+      db.teachers,
+      remoteRows
+    );
+    db.teachers = merged.map((t) => ({
+      ...t,
+      password: t.password ? hashTeacherPassword(t.password) : '',
+    }));
+    saveDb();
+
+    return res.json({
+      ok: true,
+      addedCount,
+      updatedCount,
+      total: db.teachers.length,
+      teachers: sanitizeTeachers(db.teachers),
+      message: `Đã lấy danh sách giáo viên từ Supabase (thêm mới ${addedCount}, cập nhật ${updatedCount}).`,
+    });
+  });
+
+  app.post('/api/teachers', requireRoles('master'), async (req, res) => {
+    const { fullName, email, password, role, status, supabaseUrl, supabaseAnonKey } =
+      req.body ?? {};
     if (!fullName || !email || !password) {
       return res.status(400).json({ error: 'Thiếu họ tên, email hoặc mật khẩu.' });
     }
@@ -377,17 +851,30 @@ async function startServer() {
     };
     db.teachers.push(teacher);
     saveDb();
+
+    const { client: sbClient, invalidReason } = resolveSupabaseClient({
+      supabaseUrl,
+      supabaseAnonKey,
+    });
+    let supabaseSync: SupabaseSyncStatus = invalidReason
+      ? { configured: true, ok: false, error: invalidReason }
+      : { configured: false, ok: true };
+    if (sbClient) {
+      supabaseSync = await upsertSingleTeacherOnSupabaseServer(sbClient, teacher);
+    }
+
     const { password: _pw, ...safe } = teacher;
-    return res.status(201).json(safe);
+    return res.status(201).json({ ...safe, supabaseSync });
   });
 
-  app.put('/api/teachers/:userId', requireRoles('master'), (req: AuthedRequest, res) => {
+  app.put('/api/teachers/:userId', requireRoles('master'), async (req: AuthedRequest, res) => {
     const { userId } = req.params;
     const teacher = db.teachers.find((t) => t.userId === userId);
     if (!teacher) {
       return res.status(404).json({ error: 'Không tìm thấy giáo viên.' });
     }
-    const { fullName, email, password, role, status } = req.body ?? {};
+    const { fullName, email, password, role, status, supabaseUrl, supabaseAnonKey } =
+      req.body ?? {};
     const nextRole =
       typeof role === 'string' ? normalizeAdminRole(role) : teacher.role;
     const nextStatus: TeacherAccountStatus =
@@ -421,6 +908,7 @@ async function startServer() {
       });
     }
 
+    const previousEmail = teacher.email;
     if (typeof email === 'string' && email.trim()) {
       const cleanEmail = email.trim().toLowerCase();
       if (
@@ -440,11 +928,27 @@ async function startServer() {
     teacher.role = nextRole;
     teacher.status = nextStatus;
     saveDb();
+
+    const { client: sbClient, invalidReason } = resolveSupabaseClient({
+      supabaseUrl,
+      supabaseAnonKey,
+    });
+    let supabaseSync: SupabaseSyncStatus = invalidReason
+      ? { configured: true, ok: false, error: invalidReason }
+      : { configured: false, ok: true };
+    if (sbClient) {
+      supabaseSync = await upsertSingleTeacherOnSupabaseServer(
+        sbClient,
+        teacher,
+        previousEmail
+      );
+    }
+
     const { password: _pw, ...safe } = teacher;
-    return res.json(safe);
+    return res.json({ ...safe, supabaseSync });
   });
 
-  app.delete('/api/teachers/:userId', requireRoles('master'), (req: AuthedRequest, res) => {
+  app.delete('/api/teachers/:userId', requireRoles('master'), async (req: AuthedRequest, res) => {
     const { userId } = req.params;
     if (req.authTeacher?.userId === userId) {
       return res.status(400).json({ error: 'Không thể tự xóa tài khoản đang đăng nhập.' });
@@ -455,9 +959,23 @@ async function startServer() {
     }
     const idx = db.teachers.findIndex((t) => t.userId === userId);
     if (idx === -1) return res.status(404).json({ error: 'Không tìm thấy giáo viên.' });
+    const removed = db.teachers[idx];
     db.teachers.splice(idx, 1);
     saveDb();
-    return res.json({ ok: true });
+
+    const { supabaseUrl, supabaseAnonKey } = req.body ?? {};
+    const { client: sbClient, invalidReason } = resolveSupabaseClient({
+      supabaseUrl,
+      supabaseAnonKey,
+    });
+    let supabaseSync: SupabaseSyncStatus = invalidReason
+      ? { configured: true, ok: false, error: invalidReason }
+      : { configured: false, ok: true };
+    if (sbClient) {
+      supabaseSync = await deleteTeacherOnSupabaseServer(sbClient, removed);
+    }
+
+    return res.json({ ok: true, supabaseSync });
   });
 
   // --- Schools (Master only) ---

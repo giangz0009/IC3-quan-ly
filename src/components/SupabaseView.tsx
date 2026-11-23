@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { SUPABASE_SCHEMA_SQL } from '../data/seedData';
 import type { AdminDatabase } from '../types/ic3';
-import { api } from '../utils/api';
+import { api, type SafeTeacher } from '../utils/api';
 import {
   clearSupabaseSettings,
   fetchQuestionBankFromSupabase,
@@ -23,6 +23,7 @@ import {
   getQuestionBankSupabaseEnabled,
   getSavedSupabaseSettings,
   isSupabaseConfigured,
+  runTrackedSupabaseActivity,
   saveSupabaseSettings,
   setQuestionBankSupabaseEnabled,
   syncLocalDatabaseToSupabase,
@@ -32,7 +33,7 @@ import {
 } from '../utils/supabaseClient';
 
 interface SupabaseViewProps {
-  db: AdminDatabase;
+  db: Omit<AdminDatabase, 'teachers'> & { teachers: SafeTeacher[] };
   onRefresh: () => Promise<void>;
   onNotify: (msg: string, isError?: boolean) => void;
 }
@@ -54,6 +55,7 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
   const [testing, setTesting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [pullingQb, setPullingQb] = useState(false);
+  const [pullingTeachers, setPullingTeachers] = useState(false);
   const [sampling, setSampling] = useState(false);
 
   const [report, setReport] = useState<SupabaseConnectionReport | null>(null);
@@ -63,7 +65,8 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
     ok: boolean;
   } | null>(null);
 
-  const isSupabaseBusy = testing || syncing || pullingQb || sampling;
+  const isSupabaseBusy =
+    testing || syncing || pullingQb || pullingTeachers || sampling;
 
   function handleSaveConfig(e: React.FormEvent) {
     e.preventDefault();
@@ -87,7 +90,10 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
     setTesting(true);
     setStatusMessage(null);
     saveSupabaseSettings({ url, anonKey });
-    const res = await testSupabaseConnection({ url, anonKey }, db);
+    const res = await testSupabaseConnection(
+      { url, anonKey },
+      db as unknown as AdminDatabase
+    );
     setReport(res);
     setStatusMessage({ text: res.message, ok: res.ok });
     onNotify(res.message, !res.ok);
@@ -97,14 +103,73 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
   async function handleSyncToSupabase() {
     setSyncing(true);
     saveSupabaseSettings({ url, anonKey });
-    const res = await syncLocalDatabaseToSupabase({ url, anonKey }, db);
-    setStatusMessage({ text: res.message, ok: res.ok });
-    onNotify(res.message, !res.ok);
-    if (res.ok) {
-      const refreshedReport = await testSupabaseConnection({ url, anonKey }, db);
-      setReport(refreshedReport);
+    const res = await syncLocalDatabaseToSupabase(
+      { url, anonKey },
+      db as unknown as AdminDatabase
+    );
+    if (!res.ok) {
+      setStatusMessage({ text: res.message, ok: false });
+      onNotify(res.message, true);
+      setSyncing(false);
+      return;
     }
+
+    let finalMessage = res.message;
+    let finalOk = true;
+    try {
+      const teacherSync = await runTrackedSupabaseActivity(
+        'Đang đồng bộ danh sách Giáo viên lên Supabase...',
+        () => api.syncTeachersToSupabase({ url, anonKey })
+      );
+      finalMessage = `${res.message} ${teacherSync.message}`;
+    } catch (err) {
+      const teacherErr =
+        err instanceof Error
+          ? err.message
+          : 'Không thể đồng bộ bảng admin_teachers.';
+      finalMessage = `${res.message} Tuy nhiên phần Giáo viên chưa đồng bộ được: ${teacherErr}`;
+      finalOk = false;
+    }
+
+    setStatusMessage({ text: finalMessage, ok: finalOk });
+    onNotify(finalMessage, !finalOk);
+    const refreshedReport = await testSupabaseConnection(
+      { url, anonKey },
+      db as unknown as AdminDatabase
+    );
+    setReport(refreshedReport);
     setSyncing(false);
+  }
+
+  async function handlePullTeachers() {
+    setPullingTeachers(true);
+    saveSupabaseSettings({ url, anonKey });
+    try {
+      const res = await runTrackedSupabaseActivity(
+        'Đang kéo danh sách Giáo viên từ Supabase...',
+        () => api.pullTeachersFromSupabase({ url, anonKey })
+      );
+      await onRefresh();
+      const refreshedReport = await testSupabaseConnection(
+        { url, anonKey },
+        {
+          ...(db as unknown as AdminDatabase),
+          teachers: res.teachers as unknown as AdminDatabase['teachers'],
+        }
+      );
+      setReport(refreshedReport);
+      setStatusMessage({ text: res.message, ok: true });
+      onNotify(res.message);
+    } catch (err) {
+      const errMsg =
+        err instanceof Error
+          ? err.message
+          : 'Không thể lấy danh sách Giáo viên từ Supabase.';
+      setStatusMessage({ text: errMsg, ok: false });
+      onNotify(errMsg, true);
+    } finally {
+      setPullingTeachers(false);
+    }
   }
 
   async function handlePullQuestionBank() {
@@ -143,7 +208,7 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
       setLiveQbSync(true);
       await onRefresh();
       const refreshedReport = await testSupabaseConnection({ url, anonKey }, {
-        ...db,
+        ...(db as unknown as AdminDatabase),
         modules: pulled.modules,
         knowledgeCategories: pulled.knowledgeCategories,
         knowledgeParts: pulled.knowledgeParts,
@@ -314,6 +379,19 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
               <button
                 type="button"
                 disabled={isSupabaseBusy}
+                onClick={handlePullTeachers}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-950 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {pullingTeachers ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <DownloadCloud className="w-3.5 h-3.5" />
+                )}
+                <span>{pullingTeachers ? 'Đang kéo giáo viên...' : 'Lấy Giáo viên từ Supabase'}</span>
+              </button>
+              <button
+                type="button"
+                disabled={isSupabaseBusy}
                 onClick={handleFetchSample}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-950 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
@@ -348,9 +426,9 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
             </div>
             <div className="font-mono tabular-nums">
               {db.schools.length} trường · {db.classes.length} lớp · {db.students.length} học sinh ·{' '}
-              {db.modules?.length ?? 0} mô-đun · {db.knowledgeCategories?.length ?? 0} nhóm ·{' '}
-              {db.knowledgeParts?.length ?? 0} phần · {db.questions.length} câu hỏi ·{' '}
-              {db.questionSets.length} bộ đề
+              {db.teachers.length} giáo viên · {db.modules?.length ?? 0} mô-đun ·{' '}
+              {db.knowledgeCategories?.length ?? 0} nhóm · {db.knowledgeParts?.length ?? 0} phần ·{' '}
+              {db.questions.length} câu hỏi · {db.questionSets.length} bộ đề
             </div>
           </div>
         </section>
@@ -363,7 +441,7 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
                 Lược đồ PostgreSQL Chuẩn (Supabase SQL Editor)
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Bao gồm đầy đủ 17 bảng dùng chung cho Student App và Admin App (đã cập nhật <code className="font-mono">ic3_modules</code>, <code className="font-mono">knowledge_categories</code>, <code className="font-mono">knowledge_parts</code>, <code className="font-mono">content_code</code>, <code className="font-mono">topic_order</code>).
+                Bao gồm đầy đủ 17 bảng dùng chung cho Student App và Admin App (đã cập nhật <code className="font-mono">admin_teachers</code> kèm <code className="font-mono">password_hash</code> liên trường, <code className="font-mono">ic3_modules</code>, <code className="font-mono">knowledge_categories</code>, <code className="font-mono">knowledge_parts</code>, <code className="font-mono">content_code</code>, <code className="font-mono">topic_order</code>).
               </p>
             </div>
             <button

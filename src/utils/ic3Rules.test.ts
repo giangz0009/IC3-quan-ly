@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildAdminTeachersSupabasePayload,
   buildHotspotTargetFromPoints,
   buildQuestionBankSupabasePayload,
   buildReorderedPartUpdates,
@@ -23,7 +24,10 @@ import {
   getTeacherPermissions,
   gradeQuestion,
   isPassingIC3Score,
+  isSafeRemoteSupabaseUrl,
   isStudentBreakUnlocked,
+  mapSupabaseRowToAdminTeacher,
+  mergeRemoteTeachersWithLocal,
   normalizeAdminRole,
   normalizeTeacherStatus,
   normalizeVietnamesePassword,
@@ -921,8 +925,77 @@ test('getTeacherPermissionDetails returns accurate 7-item permission breakdown p
   assert.equal(master.filter((p) => p.allowed).length, 7);
 });
 
+test('buildAdminTeachersSupabasePayload, mapSupabaseRowToAdminTeacher, and mergeRemoteTeachersWithLocal sync teachers accurately', () => {
+  const local = [
+    {
+      userId: 'teacher_admin_01',
+      fullName: 'Nguyễn Quản Trị (Master)',
+      email: 'ADMIN@ic3master.edu.vn ',
+      password: 'scrypt$salt$hash',
+      role: 'master' as const,
+      status: 'active' as const,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    },
+  ];
 
+  const payload = buildAdminTeachersSupabasePayload(local);
+  assert.equal(payload.length, 1);
+  assert.equal(payload[0].email, 'admin@ic3master.edu.vn');
+  assert.equal(payload[0].password_hash, 'scrypt$salt$hash');
+  assert.equal(payload[0].role, 'master');
+  assert.equal(payload[0].status, 'active');
 
+  const mapped = mapSupabaseRowToAdminTeacher({
+    user_id: 'remote_u2',
+    full_name: 'Cô Lan',
+    email: 'lan@ic3.vn',
+    password_hash: 'scrypt$s2$h2',
+    role: 'teacher_lv2',
+    status: 'locked',
+    created_at: '2026-02-01T00:00:00.000Z',
+  });
+  assert.ok(mapped);
+  assert.equal(mapped.role, 'teacher_lv2');
+  assert.equal(mapped.status, 'locked');
 
+  const { merged, addedCount, updatedCount } = mergeRemoteTeachersWithLocal(local, [
+    {
+      user_id: 'uuid-remote-admin',
+      full_name: 'Nguyễn Quản Trị Cập Nhật',
+      email: 'admin@ic3master.edu.vn',
+      password_hash: '',
+      role: 'master',
+      status: 'active',
+    },
+    {
+      user_id: 'remote_u2',
+      full_name: 'Cô Lan',
+      email: 'lan@ic3.vn',
+      password_hash: 'scrypt$s2$h2',
+      role: 'teacher_lv2',
+      status: 'locked',
+    },
+  ]);
 
+  assert.equal(addedCount, 1);
+  assert.equal(updatedCount, 1);
+  assert.equal(merged.length, 2);
+  // Preserves local userId stability and local password hash when remote password_hash is empty
+  assert.equal(merged[0].userId, 'teacher_admin_01');
+  assert.equal(merged[0].password, 'scrypt$salt$hash');
+  assert.equal(merged[0].fullName, 'Nguyễn Quản Trị Cập Nhật');
+  assert.equal(merged[1].status, 'locked');
+});
+
+test('isSafeRemoteSupabaseUrl accepts public HTTPS URLs and blocks loopback or private network targets', () => {
+  assert.equal(isSafeRemoteSupabaseUrl('https://xyzproject.supabase.co'), true);
+  assert.equal(isSafeRemoteSupabaseUrl('http://localhost:54321'), false);
+  assert.equal(isSafeRemoteSupabaseUrl('http://127.0.0.1:8000'), false);
+  assert.equal(isSafeRemoteSupabaseUrl('http://169.254.169.254/latest/meta-data'), false);
+  assert.equal(isSafeRemoteSupabaseUrl('http://10.0.0.5'), false);
+  assert.equal(isSafeRemoteSupabaseUrl('http://192.168.1.10'), false);
+  assert.equal(isSafeRemoteSupabaseUrl('http://172.16.0.1'), false);
+  assert.equal(isSafeRemoteSupabaseUrl('javascript:alert(1)'), false);
+  assert.equal(isSafeRemoteSupabaseUrl(''), false);
+});
 

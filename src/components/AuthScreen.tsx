@@ -1,11 +1,18 @@
 import React, { useState } from 'react';
 import { Lock, Mail, Moon, ShieldCheck, Sun } from 'lucide-react';
 import { api, type SafeTeacher } from '../utils/api';
+import {
+  getSavedSupabaseSettings,
+  isSupabaseConfigured,
+} from '../utils/supabaseClient';
 
 interface AuthScreenProps {
   isDark: boolean;
   onToggleTheme: () => void;
-  onAuthenticated: (teacher: SafeTeacher) => void;
+  onAuthenticated: (
+    teacher: SafeTeacher,
+    authSource?: 'supabase' | 'local'
+  ) => void;
 }
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({
@@ -18,13 +25,19 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const supabaseConfigured = isSupabaseConfigured();
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      const { teacher } = await api.login(email, password);
-      onAuthenticated(teacher);
+      const { teacher, authSource } = await api.login(
+        email,
+        password,
+        getSavedSupabaseSettings()
+      );
+      onAuthenticated(teacher, authSource);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Đăng nhập thất bại.');
     } finally {
@@ -38,8 +51,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     setError(null);
     setLoading(true);
     try {
-      const { teacher } = await api.login(presetEmail, presetPassword);
-      onAuthenticated(teacher);
+      const { teacher, authSource } = await api.login(
+        presetEmail,
+        presetPassword,
+        getSavedSupabaseSettings()
+      );
+      onAuthenticated(teacher, authSource);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Đăng nhập thất bại.');
     } finally {
@@ -174,6 +191,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               >
                 {loading ? 'Đang xác thực...' : 'Đăng nhập hệ thống'}
               </button>
+
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 text-center">
+                {supabaseConfigured
+                  ? 'Đang bật xác thực đồng bộ với Supabase (public.admin_teachers) và bộ đệm cục bộ.'
+                  : 'Xác thực qua máy chủ nội bộ (tự động đồng bộ Supabase khi đã cấu hình).'}
+              </p>
             </form>
 
             <div className="mt-6 pt-5 border-t border-slate-200 dark:border-slate-800 space-y-2.5">

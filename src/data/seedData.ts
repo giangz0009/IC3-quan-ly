@@ -31,15 +31,19 @@ create table if not exists public.students (
 );
 
 create table if not exists public.admin_teachers (
-  user_id uuid primary key references auth.users(id) on delete cascade,
+  user_id text primary key,
   full_name text not null,
   email text not null unique,
+  password_hash text not null default '',
   role text not null check (role in ('teacher_lv1', 'teacher_lv2', 'master')) default 'teacher_lv1',
   status text not null check (status in ('active', 'locked')) default 'active',
   created_at timestamptz not null default now()
 );
 
--- Nâng cấp bảng admin_teachers nếu đang dùng schema cũ (super_admin/teacher + school_id)
+-- Nâng cấp bảng admin_teachers nếu đang dùng schema cũ (uuid FK auth.users, super_admin/teacher, school_id)
+alter table public.admin_teachers drop constraint if exists admin_teachers_user_id_fkey;
+alter table public.admin_teachers alter column user_id type text using user_id::text;
+alter table public.admin_teachers add column if not exists password_hash text not null default '';
 alter table public.admin_teachers drop constraint if exists admin_teachers_role_check;
 update public.admin_teachers set role = 'master' where role = 'super_admin';
 update public.admin_teachers set role = 'teacher_lv1' where role = 'teacher';
@@ -387,7 +391,7 @@ declare
   tbl text;
 begin
   foreach tbl in array array[
-    'schools', 'classes', 'students',
+    'schools', 'classes', 'students', 'admin_teachers',
     'ic3_modules', 'knowledge_categories', 'knowledge_parts', 'questions', 'question_sets',
     'class_task_configs', 'class_tasks', 'student_task_submissions', 'student_break_states',
     'class_battle_configs', 'battle_rooms', 'battle_participants', 'battle_events'

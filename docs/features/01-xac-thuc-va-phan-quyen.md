@@ -1,7 +1,7 @@
 # Tính năng 01: Xác thực & Phân quyền Giáo viên (3 cấp liên trường)
 
-**Trạng thái:** Đã hoàn thành (cục bộ + xác thực Bearer Token & `scrypt` trên server)  
-**Cập nhật lần cuối:** 2026-11-21
+**Trạng thái:** Đã hoàn thành (tích hợp đồng bộ Supabase `public.admin_teachers` / Supabase Auth + xác thực Bearer Token & `scrypt` trên server)  
+**Cập nhật lần cuối:** 2026-11-23
 
 ---
 
@@ -10,21 +10,26 @@
 | Lớp | File | Thành phần / Hàm chính |
 |---|---|---|
 | Kiểu dữ liệu | `src/types/ic3.ts` | `AdminRole = 'teacher_lv1' | 'teacher_lv2' | 'master'`, `TeacherAccountStatus = 'active' | 'locked'`, `AdminTeacher`, `SafeTeacher` |
-| Logic thuần | `src/utils/ic3Rules.ts` | `ADMIN_ROLE_PERMISSIONS`, `ADMIN_ROLE_LIST`, `normalizeAdminRole()`, `normalizeTeacherStatus()`, `getTeacherPermissions()`, `getTeacherPermissionDetails()`, `canDeleteOrDemoteMaster()`, `filterTeachers()`, `summarizeTeachersByRole()`, `summarizeTeacherStatuses()` |
-| Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test ma trận quyền 3 cấp, bảng chi tiết 7 quyền, trạng thái tài khoản, lọc/đếm giáo viên & chặn xóa/hạ quyền/khóa Master hoạt động cuối cùng |
-| Frontend | `src/components/AuthScreen.tsx` | Form đăng nhập, 3 nút truy cập nhanh theo từng cấp quyền, nút đổi giao diện Sáng/Tối |
+| Logic thuần | `src/utils/ic3Rules.ts` | `ADMIN_ROLE_PERMISSIONS`, `ADMIN_ROLE_LIST`, `normalizeAdminRole()`, `normalizeTeacherStatus()`, `getTeacherPermissions()`, `getTeacherPermissionDetails()`, `canDeleteOrDemoteMaster()`, `filterTeachers()`, `summarizeTeachersByRole()`, `summarizeTeacherStatuses()`, `buildAdminTeachersSupabasePayload()`, `mapSupabaseRowToAdminTeacher()`, `mergeRemoteTeachersWithLocal()`, `isSafeRemoteSupabaseUrl()` |
+| Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test ma trận quyền 3 cấp, bảng chi tiết 7 quyền, trạng thái tài khoản, lọc/đếm giáo viên, chặn xóa/hạ quyền/khóa Master cuối cùng, đồng bộ `admin_teachers` và kiểm tra URL hợp lệ |
+| Frontend | `src/components/AuthScreen.tsx` | Form đăng nhập (truyền cấu hình Supabase từ trình duyệt lên server), 3 nút truy cập nhanh theo từng cấp quyền, nút đổi giao diện Sáng/Tối |
 | Frontend | `src/App.tsx` | Giữ phiên trong bộ nhớ JS (`memoryAuthToken`), ẩn tab theo quyền (`teachers`, `battle`, `supabase`), hỗ trợ `?autostart=1` |
-| Frontend | `src/components/TeacherManagementView.tsx` | Tab *"Quản lý Giáo viên"* dành riêng cho `master`: cột trạng thái dạng icon gọn, nút **Chi tiết quyền** mở Modal mô tả 7 quyền cụ thể, Modal **Sửa** tài khoản, Confirm Modal **Xóa** và đổi vai trò trực tiếp trên bảng |
-| API Client | `src/utils/api.ts` | `setAuthToken()`, gắn header `Authorization: Bearer <token>`, xử lý 401 tự đăng xuất, `login()`, `logout()`, `createTeacher()`, `updateTeacher()`, `deleteTeacher()` |
-| Backend | `server.ts` | `hashTeacherPassword()`, `verifyTeacherPassword()`, `signSessionToken()`, `verifySessionToken()`, `requireAuth`, `requireRoles()`, `POST /api/auth/login`, `POST /api/auth/logout`, `/api/teachers*` |
-| Dữ liệu | `src/data/seedData.ts` | 3 tài khoản giáo viên mẫu (`status: 'active'`, không gắn `schoolId`) + bảng `public.admin_teachers` trong SQL DDL |
+| Frontend | `src/components/TeacherManagementView.tsx` | Tab *"Quản lý Giáo viên"* dành riêng cho `master`: nút **Cấp tài khoản**, **Đẩy lên Supabase**, **Kéo từ Supabase**, tự động đồng bộ live lên Supabase khi thêm/sửa/khóa/xóa, cột trạng thái icon, nút icon **Chi tiết quyền (`Eye`)**, Modal **Sửa** và Confirm Modal **Xóa** |
+| API Client | `src/utils/api.ts` | `setAuthToken()`, gắn header `Authorization: Bearer <token>`, `login()`, `logout()`, `createTeacher()`, `updateTeacher()`, `deleteTeacher()`, `syncTeachersToSupabase()`, `pullTeachersFromSupabase()` |
+| Backend | `server.ts` | `hashTeacherPassword()`, `verifyTeacherPassword()`, `signSessionToken()`, `verifySessionToken()`, `resolveSupabaseClient()`, `syncTeachersToSupabaseServer()`, `upsertSingleTeacherOnSupabaseServer()`, `deleteTeacherOnSupabaseServer()`, `requireAuth`, `requireRoles()`, `POST /api/auth/login`, `/api/teachers*` |
+| Dữ liệu | `src/data/seedData.ts` | 3 tài khoản giáo viên mẫu (`status: 'active'`, không gắn `schoolId`) + bảng `public.admin_teachers` (`user_id text primary key`, `password_hash`, RLS) trong SQL DDL |
 
 ---
 
 ## 2. Mô tả Nghiệp vụ & Giao diện
 
-### 2.1. Đăng nhập (`AuthScreen.tsx`) & Quản lý Phiên
-- Phiên đăng nhập giữ an toàn bằng **Bearer Token ký HMAC-SHA256** trong bộ nhớ JS (`memoryAuthToken` tại `src/utils/api.ts`) — không lưu thông tin tài khoản vào `sessionStorage` hay `localStorage`.
+### 2.1. Đăng nhập (`AuthScreen.tsx` + `POST /api/auth/login`) & Quản lý Phiên
+- Khi có cấu hình Supabase (từ `localStorage` của trình duyệt gửi kèm yêu cầu đăng nhập hoặc `SUPABASE_URL` / `SUPABASE_ANON_KEY` trong `.env` server), `POST /api/auth/login` kiểm tra URL hợp lệ rồi truy vấn `public.admin_teachers`:
+  1. Đối chiếu mật khẩu qua `password_hash` (`scrypt`) hoặc fallback `supabase.auth.signInWithPassword({ email, password })` (hỗ trợ trường hợp tài khoản tạo qua Supabase Auth).
+  2. Kiểm tra trạng thái `status === 'locked'` (đồng bộ trạng thái khóa về Local DB và trả `403`).
+  3. Đồng bộ/cập nhật thông tin tài khoản (`fullName`, `role`, `status`, hash mật khẩu) vào Local DB (`data/ic3_admin_db.json`) và cấp Bearer Token HMAC-SHA256.
+  4. Nếu tài khoản chưa có trên Supabase hoặc Supabase tạm thời không khả dụng, tự động fallback xác thực qua Local DB.
+- Phiên đăng nhập giữ an toàn bằng **Bearer Token ký HMAC-SHA256** trong bộ nhớ JS (`memoryAuthToken` tại `src/utils/api.ts`) — không lưu thông tin tài khoản vào `sessionStorage` hay `localStorage`, và không bao giờ trả `password_hash` về trình duyệt.
 - Hỗ trợ **3 nút Truy cập nhanh tài khoản mẫu** đại diện cho 3 cấp quyền liên trường:
   - **Giáo viên Master:** `admin@ic3master.edu.vn` / `admin123` (`role: 'master'`).
   - **GV Chuyên môn (LV2):** `chuyenmon.lv2@ic3master.edu.vn` / `teacher123` (`role: 'teacher_lv2'`).
@@ -63,12 +68,13 @@ Mọi tài khoản giáo viên đều **không bị khóa vào một trường c
 
 ## 4. Hạn chế hiện tại & Hướng phát triển
 
-- Bảng `public.admin_teachers` trên Supabase đã được cập nhật DDL (3 vai trò mới, bỏ `school_id`), nhưng xác thực hiện tại chạy qua Express API cục bộ (`server.ts`); chưa đồng bộ mật khẩu/session trực tiếp với Supabase Auth (`auth.users`).
+- Ở môi trường xem trước, policy RLS cho `public.admin_teachers` hiện mở cho `anon, authenticated` nhằm đồng bộ thuận tiện từ cấu hình Project URL + Anon Key; khi triển khai production nhiều giáo viên, nên chuyển sang xác thực Supabase Auth + siết policy RLS theo `auth.uid()` và đẩy `password_hash` về phía server/Auth hoàn toàn.
 
 ---
 
 ## 5. Nhật ký thay đổi
 
+- **2026-11-23 (Đồng bộ Supabase `admin_teachers` & Tích hợp Đăng nhập):** Mở rộng `public.admin_teachers` với `user_id text primary key`, cột `password_hash`, bỏ `school_id` và bật RLS; tích hợp xác thực đăng nhập (`POST /api/auth/login`) qua `public.admin_teachers` và `supabase.auth.signInWithPassword` kèm đồng bộ bộ đệm cục bộ; thêm đồng bộ live CRUD + API đẩy/kéo danh sách giáo viên (`/api/teachers/sync-supabase`, `/api/teachers/pull-supabase`) trong `TeacherManagementView` và `SupabaseView`.
 - **2026-11-21 (cập nhật Modal & Icon trạng thái):** Nâng cấp `TeacherManagementView.tsx`: hiển thị cột *Trạng thái tài khoản* dạng icon gọn, bỏ cột văn bản *Quyền thao tác* thay bằng nút **Chi tiết quyền** mở Modal Box mô tả đầy đủ 7 quyền cụ thể của từng giáo viên, mở Modal Box riêng khi bấm **Sửa** và mở Confirm Modal Box xác nhận khi bấm **Xóa**.
 - **2026-11-21 (cập nhật giao diện & trạng thái):** Cập nhật `TeacherManagementView.tsx` loại bỏ hoàn toàn phần hiển thị/điều phối trường học cũ, bổ sung chỉnh sửa vai trò trực tiếp trên từng dòng danh sách, thêm trạng thái tài khoản (`active` / `locked`), bộ lọc trạng thái và kiểm tra chặn đăng nhập/khóa tài khoản Master cuối cùng trên server.
 - **2026-11-21 (bổ sung):** Tách màn hình quản lý & phân quyền giáo viên thành tab riêng `TeacherManagementView.tsx` (chỉ hiển thị với `master`), bổ sung tìm kiếm và bộ lọc theo 3 cấp quyền, giữ nguyên nguyên tắc mọi giáo viên tự do truy cập toàn bộ trường học mà không cần điều phối/gán trường.

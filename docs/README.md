@@ -74,7 +74,7 @@ npx --yes tsx --test src/utils/ic3Rules.test.ts
 │       ├── ClassTasksView.tsx         # Tab Giao Bài tập Lớp & theo dõi mở khóa Giải lao
 │       ├── BattleControlView.tsx      # Tab Điều phối Thi đấu Realtime theo lớp
 │       ├── ReportsView.tsx            # Tab Thống kê, lịch sử nộp/thi đấu & xuất CSV Excel
-│       └── SupabaseView.tsx           # Tab Kết nối Supabase, kiểm tra 14 bảng, đọc thử & SQL DDL
+│       └── SupabaseView.tsx           # Tab Kết nối Supabase, kiểm tra 15 bảng, đọc thử & SQL DDL
 ```
 
 ---
@@ -84,19 +84,20 @@ npx --yes tsx --test src/utils/ic3Rules.test.ts
 | Mã | Tính năng | File mô tả chi tiết | Trạng thái hiện tại | Phạm vi đồng bộ Supabase hiện tại |
 |---|---|---|---|---|
 | **00** | Kiến trúc, Mô hình Dữ liệu & SQL Schema | [00-kien-truc-va-du-lieu.md](./00-kien-truc-va-du-lieu.md) | Hoàn thiện lõi | 17 bảng DDL chuẩn hóa FK 4 tầng + RLS |
-| **01** | Xác thực & Phân quyền 3 cấp liên trường (`LV1` / `LV2` / `Master`) | [features/01-xac-thuc-va-phan-quyen.md](./features/01-xac-thuc-va-phan-quyen.md) | Hoàn thành (`scrypt` + Bearer Token) | Cục bộ (`server.ts`); bảng `admin_teachers` có sẵn ở DDL mới (không `school_id`) |
+| **01** | Xác thực & Phân quyền 3 cấp liên trường (`LV1` / `LV2` / `Master`) | [features/01-xac-thuc-va-phan-quyen.md](./features/01-xac-thuc-va-phan-quyen.md) | Hoàn thành (`scrypt` + Bearer Token + Supabase) | **Đồng bộ 2 chiều qua `server.ts`**: đăng nhập xác thực `public.admin_teachers` / Supabase Auth + tự đồng bộ về Local DB |
 | **02** | Tổng quan Dashboard | [features/02-tong-quan-dashboard.md](./features/02-tong-quan-dashboard.md) | Hoàn thành | Đọc từ Local DB (toàn bộ các trường cho cả 3 cấp) |
-| **03** | Quản lý Trường, Lớp, Học sinh & GV | [features/03-quan-ly-truong-lop-va-hoc-sinh.md](./features/03-quan-ly-truong-lop-va-hoc-sinh.md) | Hoàn thành | Đẩy 1 chiều qua nút *"Đồng bộ Dữ liệu lên Supabase"* |
+| **03** | Quản lý Trường, Lớp, Học sinh & GV | [features/03-quan-ly-truong-lop-va-hoc-sinh.md](./features/03-quan-ly-truong-lop-va-hoc-sinh.md) | Hoàn thành | Trường/Lớp/HS đẩy qua nút đồng bộ tổng; **Giáo viên đồng bộ live + Đẩy/Kéo 2 chiều** |
 | **04** | Ngân hàng Câu hỏi 4 tầng & Bộ đề | [features/04-ngan-hang-cau-hoi-va-bo-de.md](./features/04-ngan-hang-cau-hoi-va-bo-de.md) | Hoàn thành (LV1 Chỉ xem; LV2/Master Toàn quyền) | **Đồng bộ 2 chiều trực tiếp** (kéo khởi động, đẩy/kéo tay, thêm/sửa/xóa/sắp xếp live) |
 | **05** | Giao Bài tập Lớp & Mở khóa Giải lao | [features/05-giao-bai-tap-lop-va-gio-giai-lao.md](./features/05-giao-bai-tap-lop-va-gio-giai-lao.md) | Hoàn thành | Đẩy cấu hình & break states qua nút đồng bộ tổng ở Tab Supabase |
 | **06** | Điều phối Thi đấu Realtime | [features/06-thi-dau-realtime.md](./features/06-thi-dau-realtime.md) | Hoàn thành lõi + mô phỏng server (LV2 & Master) | Đẩy `class_battle_configs` qua đồng bộ tổng; phòng đấu chạy trên `server.ts` |
 | **07** | Thống kê & Báo cáo Excel CSV | [features/07-thong-ke-va-bao-cao.md](./features/07-thong-ke-va-bao-cao.md) | Hoàn thành | Đọc từ `submissions` & `battleRooms` cục bộ |
-| **08** | Kết nối, Đồng bộ & Modal Loading Supabase | [features/08-ket-noi-dong-bo-va-loading-supabase.md](./features/08-ket-noi-dong-bo-va-loading-supabase.md) | Hoàn thành (Modal toàn màn hình, chỉ Master) | Toàn hệ thống gọi Supabase thông qua `trackSupabaseCall` |
+| **08** | Kết nối, Đồng bộ & Modal Loading Supabase | [features/08-ket-noi-dong-bo-va-loading-supabase.md](./features/08-ket-noi-dong-bo-va-loading-supabase.md) | Hoàn thành (Modal toàn màn hình, chỉ Master) | Toàn hệ thống gọi Supabase thông qua `trackSupabaseCall` (kiểm tra 15 bảng gồm `admin_teachers`) |
 
 ---
 
 ## 5. Nhật ký Tiến triển gần đây (Changelog)
 
+- **Đồng bộ Supabase `public.admin_teachers` & Tích hợp Đăng nhập:** Chuẩn hóa bảng `public.admin_teachers` (`user_id text primary key`, `password_hash`, bỏ `school_id`, bật RLS), nâng cấp `POST /api/auth/login` xác thực với `public.admin_teachers` / `supabase.auth.signInWithPassword` kèm đồng bộ bộ đệm cục bộ, đồng bộ live CRUD và đẩy/kéo danh sách giáo viên qua `server.ts` ở cả `TeacherManagementView` và `SupabaseView`.
 - **Phân quyền Giáo viên 3 cấp liên trường (`teacher_lv1` / `teacher_lv2` / `master`) & Tab `TeacherManagementView`:** Bỏ hoàn toàn việc gán/điều phối trường cho từng giáo viên — bất kỳ giáo viên nào có tài khoản đều truy cập tự do mọi trường trong hệ thống. Tách màn hình **Quản lý Giáo viên** (`TeacherManagementView.tsx`, chỉ hiển thị với Master) hỗ trợ tìm kiếm, lọc theo 3 nhóm quyền chức năng (**GV Giảng dạy LV1**: chỉ xem Ngân hàng Câu hỏi, giao bài tập lớp, không tổ chức thi đấu realtime; **GV Chuyên môn LV2**: toàn quyền Ngân hàng Câu hỏi + giao bài tập + tổ chức thi đấu realtime; **Giáo viên Master**: toàn quyền không giới hạn) và thêm/sửa/xóa tài khoản an toàn (`scrypt`, Bearer Token HMAC-SHA256 giữ trong bộ nhớ JS, và `requireAuth`/`requireRoles` trên toàn bộ REST API).
 - **Kiến trúc 4 tầng Ngân hàng Câu hỏi & Khóa ngoại SQL:** Chuẩn hóa phân cấp `ic3_modules` → `knowledge_categories` → `knowledge_parts` → `questions` (với `content_code` và `topic_order`), bổ sung composite `UNIQUE` và `FOREIGN KEY` (`ON UPDATE CASCADE ON DELETE RESTRICT`) để hiển thị liên kết rõ ràng trên Supabase Schema Visualizer.
 - **Đồng bộ 2 chiều Ngân hàng Câu hỏi:** Hỗ trợ đọc tự động khi mở app, kéo/đẩy thủ công, và tự động đồng bộ live mỗi khi thêm/sửa/xóa/đảo thứ tự Mô-đun, Nhóm, Phần, Câu hỏi, Bộ đề (tự động tạo bản ghi cha còn thiếu để không lỗi FK).

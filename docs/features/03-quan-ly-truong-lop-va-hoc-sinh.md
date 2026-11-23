@@ -1,7 +1,7 @@
 # Tính năng 03: Quản lý Trường học, Lớp học, Học sinh & Phân quyền Giáo viên
 
 **Trạng thái:** Đã hoàn thành  
-**Cập nhật lần cuối:** 2026-11-21
+**Cập nhật lần cuối:** 2026-11-23
 
 ---
 
@@ -10,11 +10,11 @@
 | Lớp | File | Thành phần / Hàm chính |
 |---|---|---|
 | Frontend | `src/components/SchoolsStudentsView.tsx` | Giao diện 12 cột (4 cột Trường/Lớp + 8 cột Học sinh), Modal Thêm/Sửa Trường/Lớp/Học sinh, nhập CSV, Reset MK và nút chuyển nhanh sang tab Quản lý Giáo viên (cho Master) |
-| Frontend | `src/components/TeacherManagementView.tsx` | Tab Quản lý Giáo viên riêng cho `master` (tìm kiếm, lọc 3 cấp quyền, Modal Cấp/Sửa tài khoản, Confirm Modal Xóa, nút icon Chi tiết quyền) |
-| Logic thuần | `src/utils/ic3Rules.ts` | `normalizeVietnamesePassword()`, `parseStudentsCsv()`, `getTeacherPermissions()`, `getTeacherPermissionDetails()`, `canDeleteOrDemoteMaster()`, `filterTeachers()`, `summarizeTeachersByRole()`, `summarizeTeacherStatuses()` |
-| Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test chuẩn hóa mật khẩu tiếng Việt (`Đỗ Gia Huy` → `dogiahuy`), phân tích CSV & phân quyền 3 cấp |
-| API Client | `src/utils/api.ts` | `createSchool`, `updateSchool`, `deleteSchool`, `createClass`, `updateClass`, `deleteClass`, `createStudent`, `batchImportStudents`, `updateStudent`, `deleteStudent`, `resetStudentPassword`, `resetClassPasswords`, `createTeacher`, `updateTeacher`, `deleteTeacher` |
-| Backend | `server.ts` | Các route `/api/schools*` (`master`), `/api/classes*`, `/api/students*` (mọi GV), `/api/teachers*` (`master`) |
+| Frontend | `src/components/TeacherManagementView.tsx` | Tab Quản lý Giáo viên riêng cho `master` (tìm kiếm, lọc 3 cấp quyền, Modal Cấp/Sửa tài khoản, Confirm Modal Xóa, nút icon Chi tiết quyền, đồng bộ 2 chiều với Supabase `public.admin_teachers`) |
+| Logic thuần | `src/utils/ic3Rules.ts` | `normalizeVietnamesePassword()`, `parseStudentsCsv()`, `getTeacherPermissions()`, `getTeacherPermissionDetails()`, `canDeleteOrDemoteMaster()`, `filterTeachers()`, `summarizeTeachersByRole()`, `summarizeTeacherStatuses()`, `buildAdminTeachersSupabasePayload()`, `mergeRemoteTeachersWithLocal()` |
+| Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test chuẩn hóa mật khẩu tiếng Việt (`Đỗ Gia Huy` → `dogiahuy`), phân tích CSV, phân quyền 3 cấp & đồng bộ `admin_teachers` |
+| API Client | `src/utils/api.ts` | `createSchool`, `updateSchool`, `deleteSchool`, `createClass`, `updateClass`, `deleteClass`, `createStudent`, `batchImportStudents`, `updateStudent`, `deleteStudent`, `resetStudentPassword`, `resetClassPasswords`, `createTeacher`, `updateTeacher`, `deleteTeacher`, `syncTeachersToSupabase`, `pullTeachersFromSupabase` |
+| Backend | `server.ts` | Các route `/api/schools*` (`master`), `/api/classes*`, `/api/students*` (mọi GV), `/api/teachers*` (`master`, kèm đồng bộ `public.admin_teachers`) |
 
 ---
 
@@ -49,7 +49,7 @@
     - **Tìm kiếm & lọc đa chiều:** Tìm tức thời theo họ tên/email, lọc theo nhóm quyền và lọc theo trạng thái tài khoản (`Tất cả trạng thái`, `Đang hoạt động`, `Tạm khóa`).
     - **Cột Vai trò (Quyền) chỉ đọc:** Không cho phép đổi vai trò trực tiếp trên bảng; mọi chỉnh sửa vai trò/quyền phải thực hiện thông qua nút **Sửa** → Modal Box *Chỉnh sửa Tài khoản Giáo viên*.
     - **Cột Trạng thái tài khoản dạng Icon:** Hiển thị biểu tượng trực quan tiết kiệm không gian (`CheckCircle2` xanh ngọc = *Đang hoạt động*, `Lock` đỏ = *Tạm khóa*), kèm thao tác **Khóa / Mở khóa** nhanh trên từng dòng.
-    - **Sửa (Modal) / Xóa (Confirm Modal):** Bấm **Sửa** mở Modal Box chỉnh sửa Họ tên, Email, Mật khẩu mới, Vai trò và Trạng thái; bấm **Xóa** mở Confirm Modal Box xác nhận trước khi xóa vĩnh viễn. Tự động bảo vệ tài khoản đang đăng nhập và tài khoản `master` đang hoạt động cuối cùng (*Được bảo vệ*).
+    - **Sửa (Modal) / Xóa (Confirm Modal) & Đồng bộ Supabase:** Bấm **Sửa** mở Modal Box chỉnh sửa Họ tên, Email, Mật khẩu mới, Vai trò và Trạng thái; bấm **Xóa** mở Confirm Modal Box xác nhận trước khi xóa vĩnh viễn. Tự động bảo vệ tài khoản đang đăng nhập và tài khoản `master` đang hoạt động cuối cùng (*Được bảo vệ*). Khi đã kết nối Supabase, mọi thao tác thêm/sửa/khóa/xóa tự động đồng bộ lên `public.admin_teachers`, kèm nút **Đẩy lên Supabase** và **Kéo từ Supabase** ngay trên thanh tiêu đề bảng.
 
 ---
 
@@ -67,12 +67,13 @@
 
 ## 4. Hạn chế hiện tại & Hướng phát triển
 
-- Các thao tác Thêm/Sửa/Xóa Trường, Lớp, Học sinh hiện chỉ ghi vào Local DB (`server.ts`) và **chưa đồng bộ tự động ngay lên Supabase**; cần bấm nút *"Đồng bộ Dữ liệu lên Supabase"* ở tab **Kết nối Supabase** để đẩy lên.
+- Các thao tác Thêm/Sửa/Xóa Trường, Lớp, Học sinh hiện chỉ ghi vào Local DB (`server.ts`) và **chưa đồng bộ tự động ngay lên Supabase**; cần bấm nút *"Đồng bộ Dữ liệu lên Supabase"* ở tab **Kết nối Supabase** để đẩy lên (riêng danh sách Giáo viên đã hỗ trợ đồng bộ 2 chiều và đồng bộ live).
 
 ---
 
 ## 5. Nhật ký thay đổi
 
+- **2026-11-23 (Đồng bộ Supabase cho Quản lý Giáo viên):** Bổ sung đồng bộ live khi thêm/sửa/khóa/xóa giáo viên và hai nút **Kéo từ Supabase** / **Đẩy lên Supabase** trong `TeacherManagementView.tsx` (đi qua `server.ts` để bảo vệ `password_hash`).
 - **2026-11-21 (Bố cục mới tab Quản lý Giáo viên):** Chuyển nút **Cấp tài khoản** xuống phần đầu bảng *Danh sách Giáo viên*; vô hiệu hóa thao tác đổi vai trò trực tiếp trên bảng (chỉ cho đổi vai trò trong Modal **Sửa**); chuyển nút icon **Chi tiết quyền (`Eye`)** lên phần *Quản lý Tài khoản & Phân quyền Giáo viên* phía trên gắn theo từng nhóm quyền.
 - **2026-11-21 (Chuẩn hóa Modal Box & Nút Icon Chi tiết quyền):** Chuyển nút *Chi tiết quyền* tại bảng Giáo viên sang dạng chỉ hiển thị icon (`Eye`) kèm mô tả khi hover; chuyển form **Cấp Tài khoản Giáo viên mới** vào Modal Box; bổ sung Modal Box **Sửa Trường học / Sửa Lớp học / Sửa Học sinh** trong `SchoolsStudentsView.tsx`.
 - **2026-11-21 (cập nhật Modal & Icon trạng thái):** Cập nhật cột *Trạng thái tài khoản* sang dạng icon, bỏ cột văn bản *Quyền thao tác* để thay bằng nút mở Modal Box chi tiết quyền, dùng Modal Box riêng khi bấm **Sửa** và Confirm Modal Box khi bấm **Xóa**.

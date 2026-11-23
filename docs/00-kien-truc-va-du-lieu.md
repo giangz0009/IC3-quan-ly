@@ -1,6 +1,6 @@
 # Kiến trúc Hệ thống, Mô hình Dữ liệu & API
 
-**Cập nhật lần cuối:** 2026-11-20  
+**Cập nhật lần cuối:** 2026-11-23  
 **File nguồn liên quan:** `server.ts`, `src/types/ic3.ts`, `src/data/seedData.ts`, `src/utils/api.ts`, `src/utils/supabaseClient.ts`
 
 ---
@@ -15,13 +15,16 @@
    - Ghi file an toàn theo cơ chế atomic write (`ic3_admin_db.json.tmp` → `fs.renameSync`).
 
 2. **Lớp đám mây (`Supabase PostgreSQL`)**:
-   - Trình duyệt khởi tạo `SupabaseClient` trực tiếp qua `Project URL` và `Anon Key` lưu trong `localStorage` (`ic3_admin_supabase_url`, `ic3_admin_supabase_anon_key`).
-   - Toàn bộ **16 bảng vận hành** đều được bật RLS với policy cho phép `anon` và `authenticated` thao tác (`select, insert, update, delete`), phục vụ dùng chung với ứng dụng Học sinh.
-   - Riêng phân hệ **Ngân hàng Câu hỏi** có cơ chế đồng bộ 2 chiều trực tiếp (kéo về lúc khởi động và đẩy từng thay đổi CRUD ngay lập tức khi tùy chọn `ic3_admin_supabase_qb_live` đang bật). Các phân hệ Trường/Lớp/Học sinh/Bài tập/Cấu hình thi đấu đồng bộ đẩy lên qua nút *"Đồng bộ Dữ liệu lên Supabase"*.
+   - Trình duyệt khởi tạo `SupabaseClient` trực tiếp qua `Project URL` và `Anon Key` lưu trong `localStorage` (`ic3_admin_supabase_url`, `ic3_admin_supabase_anon_key`), hoặc dùng biến môi trường phía server (`SUPABASE_URL`, `SUPABASE_ANON_KEY`).
+   - Toàn bộ **17 bảng vận hành** đều được bật RLS với policy cho phép `anon` và `authenticated` thao tác (`select, insert, update, delete`), phục vụ dùng chung với ứng dụng Học sinh và xác thực giáo viên.
+   - Phân hệ **Ngân hàng Câu hỏi** có đồng bộ 2 chiều trực tiếp từ trình duyệt (kéo về lúc khởi động và đẩy từng thay đổi CRUD live).
+   - Phân hệ **Quản lý Giáo viên & Đăng nhập (`admin_teachers`)** được `server.ts` đồng bộ trực tiếp với Supabase (kiểm tra URL hợp lệ chống truy cập nội bộ trước khi kết nối, giữ `password_hash` ở server và không gửi về trình duyệt): tự động đồng bộ từng thao tác tạo/sửa/khóa/xóa, hỗ trợ đẩy/kéo hàng loạt, và xác thực đăng nhập trực tiếp qua `public.admin_teachers` (hoặc fallback `supabase.auth.signInWithPassword`) kèm đồng bộ bộ đệm cục bộ.
+   - Các phân hệ Trường/Lớp/Học sinh/Bài tập/Cấu hình thi đấu đồng bộ đẩy lên qua nút *"Đồng bộ Dữ liệu lên Supabase"* (bao gồm cả đồng bộ `admin_teachers`).
 
 ```text
 [React UI] ──(1) API /api/*──▶ [Express server.ts] ──▶ [data/ic3_admin_db.json]
-    │
+    │                                  │
+    │                                  └──▶ [Supabase PostgreSQL: admin_teachers + Auth]
     └──(2) @supabase/supabase-js (trực tiếp từ trình duyệt, bọc qua trackSupabaseCall)
             └──▶ [Supabase PostgreSQL (public.*)]
 ```
@@ -68,8 +71,8 @@
 |---|---|---|---|
 | Hệ thống | `GET /api/health` | Công khai | Kiểm tra trạng thái server |
 | Hệ thống | `GET /api/bootstrap` | `LV1 / LV2 / Master` | Trả `AdminDatabase` đã lọc theo quyền (`teachers` chỉ trả cho `master`, ẩn `password`) |
-| Xác thực | `POST /api/auth/login`, `POST /api/auth/logout` | Công khai / Đã đăng nhập | Đăng nhập bằng `email` + `password` (`scrypt`), cấp Bearer token ký HMAC-SHA256; đăng xuất thu hồi token |
-| Phân quyền GV | `POST /api/teachers`, `PUT /api/teachers/:userId`, `DELETE /api/teachers/:userId` | `Master` | Tạo / sửa (tên, email, mật khẩu tùy chọn, vai trò, trạng thái `active`/`locked`) / xóa tài khoản giáo viên (chặn tự hạ quyền/tự khóa & chặn hạ/khóa/xóa Master hoạt động cuối cùng) |
+| Xác thực | `POST /api/auth/login`, `POST /api/auth/logout` | Công khai / Đã đăng nhập | Đăng nhập bằng `email` + `password` (xác thực qua Supabase `public.admin_teachers` / `auth.signInWithPassword` khi đã cấu hình, fallback Local DB `scrypt`), chặn `locked` (`403`), đồng bộ bộ đệm cục bộ và cấp Bearer token HMAC-SHA256 |
+| Phân quyền GV | `POST /api/teachers`, `PUT /api/teachers/:userId`, `DELETE /api/teachers/:userId`, `POST /api/teachers/sync-supabase`, `POST /api/teachers/pull-supabase` | `Master` | CRUD giáo viên (tự động đồng bộ lên `public.admin_teachers` khi có Supabase) + đẩy/kéo danh sách giáo viên 2 chiều với Supabase (chặn tự hạ quyền/tự khóa & chặn hạ/khóa/xóa Master hoạt động cuối cùng) |
 | Trường học | `POST /api/schools`, `PUT /api/schools/:id`, `DELETE /api/schools/:id` | `Master` | CRUD Trường học (xóa kéo theo lớp, học sinh, bài tập, nộp bài, break, battle của trường) |
 | Lớp học | `POST /api/classes`, `PUT /api/classes/:id`, `DELETE /api/classes/:id` | `LV1 / LV2 / Master` | CRUD Lớp học liên trường (xóa kéo theo học sinh và cấu hình của lớp) |
 | Học sinh | `POST /api/students`, `POST /api/students/batch`, `PUT /api/students/:id`, `DELETE /api/students/:id` | `LV1 / LV2 / Master` | CRUD Học sinh + nhập hàng loạt CSV (tự sinh MK không dấu) |
@@ -92,7 +95,7 @@ Kịch bản SQL tại `src/data/seedData.ts` định nghĩa **17 bảng** trong
 
 1. **Tổ chức & Tài khoản (4 bảng):**
    - `schools` → `classes` (`school_id` FK `ON DELETE CASCADE`) → `students` (`class_id` FK `ON DELETE CASCADE`, `UNIQUE(class_id, student_code)`)
-   - `admin_teachers` (`user_id` FK `auth.users(id)`, `role in ('teacher_lv1', 'teacher_lv2', 'master')`, `status in ('active', 'locked')`, không gắn `school_id` cố định)
+   - `admin_teachers` (`user_id text primary key`, `email unique`, `password_hash text`, `role in ('teacher_lv1', 'teacher_lv2', 'master')`, `status in ('active', 'locked')`, không gắn `school_id` cố định)
 2. **Ngân hàng Câu hỏi & Bộ đề (5 bảng — Khóa ngoại 4 tầng):**
    - `ic3_modules` (`code UNIQUE`)
    - `knowledge_categories` (`UNIQUE(module, code)`, FK `module` → `ic3_modules(code)` `ON UPDATE CASCADE ON DELETE RESTRICT`)
@@ -109,4 +112,4 @@ Kịch bản SQL tại `src/data/seedData.ts` định nghĩa **17 bảng** trong
 5. **Lưu trữ ảnh Hotspot (Supabase Storage):**
    - Bucket công khai `hotspot-images` trên `storage.buckets` cùng 4 policy RLS trên `storage.objects` (`select`, `insert`, `update`, `delete` cho `anon, authenticated`). Đường dẫn ảnh (`imageUrl`) và tọa độ vùng/điểm đúng (`hotspotTarget`) được lưu trực tiếp trong cột `questions.payload` (`jsonb`).
 
-> **Lưu ý quan trọng khi nâng cấp DB cũ trên Supabase:** `SUPABASE_SCHEMA_SQL` có sẵn đoạn nâng cấp bảng `admin_teachers` (ánh xạ `super_admin` → `master`, `teacher` → `teacher_lv1`, cập nhật `CHECK` constraint sang 3 vai trò mới và `DROP COLUMN IF EXISTS school_id`), gỡ bỏ các ràng buộc `CHECK` cứng cũ trên `module/level/category`, tự động `DROP COLUMN IF EXISTS difficulty` trên bảng `questions`, khởi tạo bucket `hotspot-images` trên Storage, và tự động `INSERT ... ON CONFLICT DO NOTHING` để tạo dữ liệu cha còn thiếu từ `questions`/`knowledge_parts` trước khi gắn 3 ràng buộc khóa ngoại `fk_knowledge_categories_module`, `fk_knowledge_parts_category`, `fk_questions_part`.
+> **Lưu ý quan trọng khi nâng cấp DB cũ trên Supabase:** `SUPABASE_SCHEMA_SQL` có sẵn đoạn nâng cấp bảng `admin_teachers` (gỡ FK `admin_teachers_user_id_fkey` để chuyển `user_id` sang `text`, bổ sung `password_hash`, ánh xạ `super_admin` → `master`, `teacher` → `teacher_lv1`, cập nhật `CHECK` constraint sang 3 vai trò mới, `DROP COLUMN IF EXISTS school_id` và bật RLS trên `admin_teachers`), gỡ bỏ các ràng buộc `CHECK` cứng cũ trên `module/level/category`, tự động `DROP COLUMN IF EXISTS difficulty` trên bảng `questions`, khởi tạo bucket `hotspot-images` trên Storage, và tự động `INSERT ... ON CONFLICT DO NOTHING` để tạo dữ liệu cha còn thiếu từ `questions`/`knowledge_parts` trước khi gắn 3 ràng buộc khóa ngoại `fk_knowledge_categories_module`, `fk_knowledge_parts_category`, `fk_questions_part`.

@@ -1205,3 +1205,178 @@ export function summarizeTeacherStatuses(
   }
   return counts;
 }
+
+export interface AdminTeacherSupabaseRow {
+  user_id: string;
+  full_name: string;
+  email: string;
+  password_hash: string;
+  role: AdminRole;
+  status: TeacherAccountStatus;
+  created_at: string;
+}
+
+export function buildAdminTeachersSupabasePayload(
+  teachers: Array<{
+    userId: string;
+    fullName: string;
+    email: string;
+    password: string;
+    role: string;
+    status?: string | null;
+    createdAt?: string;
+  }>
+): AdminTeacherSupabaseRow[] {
+  const now = new Date().toISOString();
+  const seenEmails = new Set<string>();
+  const rows: AdminTeacherSupabaseRow[] = [];
+  for (const t of teachers) {
+    const email = t.email.trim().toLowerCase();
+    const userId = t.userId.trim();
+    if (!userId || !email || seenEmails.has(email)) continue;
+    seenEmails.add(email);
+    rows.push({
+      user_id: userId,
+      full_name: t.fullName.trim() || email,
+      email,
+      password_hash: t.password || '',
+      role: normalizeAdminRole(t.role),
+      status: normalizeTeacherStatus(t.status),
+      created_at: t.createdAt || now,
+    });
+  }
+  return rows;
+}
+
+export function mapSupabaseRowToAdminTeacher(
+  row: Record<string, unknown>,
+  existing?: {
+    userId: string;
+    fullName: string;
+    email: string;
+    password: string;
+    role: AdminRole;
+    status: TeacherAccountStatus;
+    createdAt: string;
+  }
+) {
+  const email = String(row.email ?? existing?.email ?? '')
+    .trim()
+    .toLowerCase();
+  const userId = String(row.user_id ?? existing?.userId ?? '').trim();
+  if (!userId || !email) return null;
+
+  const remoteHash =
+    typeof row.password_hash === 'string' ? row.password_hash.trim() : '';
+
+  return {
+    userId,
+    fullName: String(row.full_name ?? existing?.fullName ?? email).trim() || email,
+    email,
+    password: remoteHash || existing?.password || '',
+    role: normalizeAdminRole(
+      typeof row.role === 'string' ? row.role : existing?.role
+    ),
+    status: normalizeTeacherStatus(
+      typeof row.status === 'string' ? row.status : existing?.status
+    ),
+    createdAt: String(
+      row.created_at ?? existing?.createdAt ?? new Date().toISOString()
+    ),
+  };
+}
+
+export function mergeRemoteTeachersWithLocal<
+  T extends {
+    userId: string;
+    fullName: string;
+    email: string;
+    password: string;
+    role: AdminRole;
+    status: TeacherAccountStatus;
+    createdAt: string;
+  }
+>(localTeachers: T[], remoteRows: Array<Record<string, unknown>>) {
+  const next = localTeachers.map((t) => ({ ...t }));
+  let addedCount = 0;
+  let updatedCount = 0;
+
+  for (const row of remoteRows) {
+    const rowUserId = String(row.user_id ?? '').trim();
+    const rowEmail = String(row.email ?? '')
+      .trim()
+      .toLowerCase();
+    if (!rowUserId || !rowEmail) continue;
+
+    const matchIdx = next.findIndex(
+      (t) =>
+        t.userId === rowUserId ||
+        t.email.trim().toLowerCase() === rowEmail
+    );
+
+    if (matchIdx >= 0) {
+      const existing = next[matchIdx];
+      const mapped = mapSupabaseRowToAdminTeacher(row, existing);
+      if (!mapped) continue;
+      const changed =
+        mapped.fullName !== existing.fullName ||
+        mapped.email !== existing.email ||
+        mapped.role !== existing.role ||
+        mapped.status !== existing.status ||
+        (Boolean(row.password_hash) && mapped.password !== existing.password);
+      next[matchIdx] = {
+        ...existing,
+        ...mapped,
+        // Keep local userId stability when matched by email unless remote matches directly
+        userId: existing.userId,
+      };
+      if (changed) updatedCount += 1;
+    } else {
+      const mapped = mapSupabaseRowToAdminTeacher(row);
+      if (!mapped) continue;
+      next.push(mapped as T);
+      addedCount += 1;
+    }
+  }
+
+  return { merged: next, addedCount, updatedCount };
+}
+
+export function isSafeRemoteSupabaseUrl(rawUrl: unknown): boolean {
+  if (typeof rawUrl !== 'string') return false;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (
+      !host ||
+      host === 'localhost' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal')
+    ) {
+      return false;
+    }
+    if (
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^169\.254\./.test(host) ||
+      /^172\.(1[6-9]|2[0-9]|3[01])\./.test(host) ||
+      /^fc00:/i.test(host) ||
+      /^fd[0-9a-f]{2}:/i.test(host) ||
+      /^fe80:/i.test(host)
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
