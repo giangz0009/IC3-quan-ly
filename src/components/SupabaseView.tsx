@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -10,23 +10,22 @@ import {
   EyeOff,
   Loader2,
   RefreshCw,
+  Server,
   Trash2,
   UploadCloud,
 } from 'lucide-react';
 import { SUPABASE_SCHEMA_SQL } from '../data/seedData';
 import type { AdminDatabase } from '../types/ic3';
-import { api, type SafeTeacher } from '../utils/api';
+import { api, type SafeTeacher, type ServerHealthStatus } from '../utils/api';
 import {
   clearSupabaseSettings,
   fetchQuestionBankFromSupabase,
-  fetchSupabaseSampleQuestions,
   getQuestionBankSupabaseEnabled,
   getSavedSupabaseSettings,
   isSupabaseConfigured,
   runTrackedSupabaseActivity,
   saveSupabaseSettings,
   setQuestionBankSupabaseEnabled,
-  syncLocalDatabaseToSupabase,
   testSupabaseConnection,
   type SupabaseConnectionReport,
   type SupabaseRemoteSample,
@@ -50,6 +49,7 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
   const [liveQbSync, setLiveQbSync] = useState(() =>
     isSupabaseConfigured() ? getQuestionBankSupabaseEnabled() : true
   );
+  const [serverHealth, setServerHealth] = useState<ServerHealthStatus | null>(null);
 
   const [copied, setCopied] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -65,14 +65,32 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
     ok: boolean;
   } | null>(null);
 
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .health()
+      .then((res) => {
+        if (!cancelled) setServerHealth(res);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const isSupabaseBusy =
     testing || syncing || pullingQb || pullingTeachers || sampling;
+
+  const hasBrowserConfig = Boolean(url.trim() && anonKey.trim());
+  const configOverride = hasBrowserConfig ? { url, anonKey } : undefined;
 
   function handleSaveConfig(e: React.FormEvent) {
     e.preventDefault();
     saveSupabaseSettings({ url, anonKey });
     setQuestionBankSupabaseEnabled(liveQbSync);
     onNotify('Đã lưu cấu hình kết nối Supabase trên trình duyệt.');
+    void api.health().then(setServerHealth).catch(() => {});
+    void onRefresh();
   }
 
   function handleClearConfig() {
@@ -84,80 +102,76 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
     setSample(null);
     setStatusMessage(null);
     onNotify('Đã xóa thông tin kết nối Supabase đã lưu trên trình duyệt.');
+    void api.health().then(setServerHealth).catch(() => {});
   }
 
   async function handleTestConnection() {
     setTesting(true);
     setStatusMessage(null);
-    saveSupabaseSettings({ url, anonKey });
-    const res = await testSupabaseConnection(
-      { url, anonKey },
-      db as unknown as AdminDatabase
-    );
-    setReport(res);
-    setStatusMessage({ text: res.message, ok: res.ok });
-    onNotify(res.message, !res.ok);
-    setTesting(false);
+    if (hasBrowserConfig) {
+      saveSupabaseSettings({ url, anonKey });
+    }
+    try {
+      const res = await runTrackedSupabaseActivity(
+        'Đang kiểm tra kết nối & lược đồ 17 bảng Supabase...',
+        () => api.testSupabase(configOverride)
+      );
+      setReport(res);
+      setStatusMessage({ text: res.message, ok: res.ok });
+      onNotify(res.message, !res.ok);
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Không thể kiểm tra kết nối tới Supabase.';
+      setStatusMessage({ text: msg, ok: false });
+      onNotify(msg, true);
+    } finally {
+      setTesting(false);
+    }
   }
 
-  async function handleSyncToSupabase() {
+  async function handleSyncToSupabase(useSeedSample = false) {
     setSyncing(true);
-    saveSupabaseSettings({ url, anonKey });
-    const res = await syncLocalDatabaseToSupabase(
-      { url, anonKey },
-      db as unknown as AdminDatabase
-    );
-    if (!res.ok) {
-      setStatusMessage({ text: res.message, ok: false });
-      onNotify(res.message, true);
-      setSyncing(false);
-      return;
+    if (hasBrowserConfig) {
+      saveSupabaseSettings({ url, anonKey });
     }
-
-    let finalMessage = res.message;
-    let finalOk = true;
     try {
-      const teacherSync = await runTrackedSupabaseActivity(
-        'Đang đồng bộ danh sách Giáo viên lên Supabase...',
-        () => api.syncTeachersToSupabase({ url, anonKey })
+      const res = await runTrackedSupabaseActivity(
+        useSeedSample
+          ? 'Đang nạp dữ liệu mẫu chuẩn 17 bảng lên Supabase...'
+          : 'Đang đồng bộ toàn bộ 17 bảng dữ liệu lên Supabase...',
+        () => api.seedDatabaseToSupabase({ useSeedSample }, configOverride)
       );
-      finalMessage = `${res.message} ${teacherSync.message}`;
+      if (res.report) {
+        setReport(res.report);
+      }
+      setStatusMessage({ text: res.message, ok: res.ok });
+      onNotify(res.message, !res.ok);
+      await onRefresh();
     } catch (err) {
-      const teacherErr =
-        err instanceof Error
-          ? err.message
-          : 'Không thể đồng bộ bảng admin_teachers.';
-      finalMessage = `${res.message} Tuy nhiên phần Giáo viên chưa đồng bộ được: ${teacherErr}`;
-      finalOk = false;
+      const msg =
+        err instanceof Error ? err.message : 'Đồng bộ toàn bộ dữ liệu lên Supabase thất bại.';
+      setStatusMessage({ text: msg, ok: false });
+      onNotify(msg, true);
+    } finally {
+      setSyncing(false);
     }
-
-    setStatusMessage({ text: finalMessage, ok: finalOk });
-    onNotify(finalMessage, !finalOk);
-    const refreshedReport = await testSupabaseConnection(
-      { url, anonKey },
-      db as unknown as AdminDatabase
-    );
-    setReport(refreshedReport);
-    setSyncing(false);
   }
 
   async function handlePullTeachers() {
     setPullingTeachers(true);
-    saveSupabaseSettings({ url, anonKey });
+    if (hasBrowserConfig) {
+      saveSupabaseSettings({ url, anonKey });
+    }
     try {
       const res = await runTrackedSupabaseActivity(
         'Đang kéo danh sách Giáo viên từ Supabase...',
-        () => api.pullTeachersFromSupabase({ url, anonKey })
+        () => api.pullTeachersFromSupabase(configOverride)
       );
       await onRefresh();
-      const refreshedReport = await testSupabaseConnection(
-        { url, anonKey },
-        {
-          ...(db as unknown as AdminDatabase),
-          teachers: res.teachers as unknown as AdminDatabase['teachers'],
-        }
-      );
-      setReport(refreshedReport);
+      const refreshedReport = await api
+        .testSupabase(configOverride)
+        .catch(() => null);
+      if (refreshedReport) setReport(refreshedReport);
       setStatusMessage({ text: res.message, ok: true });
       onNotify(res.message);
     } catch (err) {
@@ -174,7 +188,27 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
 
   async function handlePullQuestionBank() {
     setPullingQb(true);
-    saveSupabaseSettings({ url, anonKey });
+    if (hasBrowserConfig) {
+      saveSupabaseSettings({ url, anonKey });
+    }
+    if (!hasBrowserConfig && serverHealth?.envConfigured) {
+      try {
+        await onRefresh();
+        const msg =
+          'Đã tải lại toàn bộ Ngân hàng Câu hỏi và dữ liệu học vụ trực tiếp từ Supabase.';
+        setStatusMessage({ text: msg, ok: true });
+        onNotify(msg);
+      } catch (err) {
+        const errMsg =
+          err instanceof Error ? err.message : 'Không thể tải lại dữ liệu từ Supabase.';
+        setStatusMessage({ text: errMsg, ok: false });
+        onNotify(errMsg, true);
+      } finally {
+        setPullingQb(false);
+      }
+      return;
+    }
+
     const pulled = await fetchQuestionBankFromSupabase({ url, anonKey });
     if (!pulled.ok) {
       setStatusMessage({ text: pulled.message, ok: false });
@@ -230,12 +264,25 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
 
   async function handleFetchSample() {
     setSampling(true);
-    saveSupabaseSettings({ url, anonKey });
-    const res = await fetchSupabaseSampleQuestions({ url, anonKey });
-    setSample(res);
-    setStatusMessage({ text: res.message, ok: res.ok });
-    onNotify(res.message, !res.ok);
-    setSampling(false);
+    if (hasBrowserConfig) {
+      saveSupabaseSettings({ url, anonKey });
+    }
+    try {
+      const res = await runTrackedSupabaseActivity(
+        'Đang đọc thử dữ liệu từ Supabase...',
+        () => api.fetchSupabaseSample(configOverride)
+      );
+      setSample(res);
+      setStatusMessage({ text: res.message, ok: res.ok });
+      onNotify(res.message, !res.ok);
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Lỗi đọc dữ liệu thử từ Supabase.';
+      setStatusMessage({ text: msg, ok: false });
+      onNotify(msg, true);
+    } finally {
+      setSampling(false);
+    }
   }
 
   async function handleCopySql() {
@@ -247,6 +294,25 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {serverHealth?.envConfigured && (
+        <div
+          role="status"
+          data-testid="supabase-env-banner"
+          className="p-4 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/80 dark:bg-emerald-950/40 flex items-start gap-3 text-xs text-emerald-900 dark:text-emerald-200"
+        >
+          <Server className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <div className="font-semibold">
+              Chế độ Đọc/Ghi Trực tiếp Supabase qua Biến Môi Trường (Vercel / Server Ready)
+            </div>
+            <p className="text-emerald-800/90 dark:text-emerald-300/90 leading-relaxed">
+              Máy chủ đã phát hiện biến môi trường <code className="font-mono">SUPABASE_URL</code> và{' '}
+              <code className="font-mono">SUPABASE_ANON_KEY</code>. Toàn bộ dữ liệu (Trường, Lớp, Học sinh, Giáo viên, Ngân hàng Câu hỏi, Bài tập, Thi đấu Realtime) đang lưu trữ trực tiếp trên Supabase PostgreSQL mà không phụ thuộc file JSON cục bộ.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Credentials + Test Actions */}
         <section className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-4">
@@ -271,7 +337,7 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
           </div>
 
           <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-            Dán <strong>Project URL</strong> và <strong>Anon / Public Key</strong> từ Supabase Dashboard (<em>Project Settings → API</em>) để kiểm tra bảng, kiểm tra cột phân cấp câu hỏi (<code className="font-mono">knowledge_parts</code>, <code className="font-mono">content_code</code>, <code className="font-mono">topic_order</code>) và đồng bộ dữ liệu mẫu.
+            Dán <strong>Project URL</strong> và <strong>Anon / Public Key</strong> từ Supabase Dashboard (<em>Project Settings → API</em>) hoặc cấu hình trực tiếp bằng biến môi trường <code className="font-mono">SUPABASE_URL</code> + <code className="font-mono">SUPABASE_ANON_KEY</code> trên Vercel.
           </p>
 
           <form onSubmit={handleSaveConfig} className="space-y-3">
@@ -353,7 +419,7 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
               <button
                 type="button"
                 disabled={isSupabaseBusy}
-                onClick={handleSyncToSupabase}
+                onClick={() => handleSyncToSupabase(false)}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 {syncing ? (
@@ -362,6 +428,19 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
                   <UploadCloud className="w-3.5 h-3.5" />
                 )}
                 <span>{syncing ? 'Đang đồng bộ...' : 'Đồng bộ Dữ liệu lên Supabase'}</span>
+              </button>
+              <button
+                type="button"
+                disabled={isSupabaseBusy}
+                onClick={() => handleSyncToSupabase(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-950 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {syncing ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Database className="w-3.5 h-3.5" />
+                )}
+                <span>Nạp dữ liệu mẫu chuẩn</span>
               </button>
               <button
                 type="button"

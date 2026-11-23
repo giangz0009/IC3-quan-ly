@@ -1,0 +1,487 @@
+import test, { after, before } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import type http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import type { AdminDatabase } from '../src/types/ic3';
+import type { SafeTeacher } from '../src/utils/api';
+
+let server: http.Server;
+let baseUrl = '';
+let masterToken = '';
+let lv1Token = '';
+
+const tmpDbDir = path.join(os.tmpdir(), 'ic3_admin_data');
+
+async function apiFetch<T>(
+  route: string,
+  options: {
+    method?: string;
+    token?: string;
+    body?: unknown;
+    headers?: Record<string, string>;
+  } = {}
+): Promise<{ status: number; data: T }> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers ?? {}),
+  };
+  if (options.token) {
+    headers.Authorization = `Bearer ${options.token}`;
+  }
+  const res = await fetch(`${baseUrl}${route}`, {
+    method: options.method ?? 'GET',
+    headers,
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+  });
+  const text = await res.text();
+  const data = (text ? JSON.parse(text) : {}) as T;
+  return { status: res.status, data };
+}
+
+before(async () => {
+  // Isolate local store into os.tmpdir() (simulating Vercel serverless FS) and clear remote env vars
+  process.env.VERCEL = '1';
+  delete process.env.SUPABASE_URL;
+  delete process.env.SUPABASE_ANON_KEY;
+  delete process.env.VITE_SUPABASE_URL;
+  delete process.env.VITE_SUPABASE_ANON_KEY;
+  if (fs.existsSync(tmpDbDir)) {
+    fs.rmSync(tmpDbDir, { recursive: true, force: true });
+  }
+
+  const { createApp } = await import('./app');
+  const app = createApp();
+  await new Promise<void>((resolve) => {
+    server = app.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      assert(addr && typeof addr !== 'string');
+      baseUrl = `http://127.0.0.1:${addr.port}`;
+      resolve();
+    });
+  });
+
+  const masterLogin = await apiFetch<{ token: string; teacher: SafeTeacher }>(
+    '/api/auth/login',
+    {
+      method: 'POST',
+      body: { email: 'admin@ic3master.edu.vn', password: 'admin123' },
+    }
+  );
+  assert.equal(masterLogin.status, 200);
+  assert(masterLogin.data.token);
+  masterToken = masterLogin.data.token;
+
+  const lv1Login = await apiFetch<{ token: string; teacher: SafeTeacher }>(
+    '/api/auth/login',
+    {
+      method: 'POST',
+      body: { email: 'giangday.lv1@ic3master.edu.vn', password: 'teacher123' },
+    }
+  );
+  assert.equal(lv1Login.status, 200);
+  assert(lv1Login.data.token);
+  lv1Token = lv1Login.data.token;
+});
+
+after(async () => {
+  if (server) {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+  if (fs.existsSync(tmpDbDir)) {
+    fs.rmSync(tmpDbDir, { recursive: true, force: true });
+  }
+});
+
+test('health endpoint reports serverless/local persistence state cleanly', async () => {
+  const { status, data } = await apiFetch<{
+    ok: boolean;
+    envConfigured: boolean;
+    supabaseConfigured: boolean;
+    persistence: string;
+  }>('/api/health');
+  assert.equal(status, 200);
+  assert.equal(data.ok, true);
+  assert.equal(data.envConfigured, false);
+  assert.equal(data.supabaseConfigured, false);
+  assert.equal(data.persistence, 'local');
+});
+
+test('authentication guards reject unauthenticated and invalid logins', async () => {
+  const unauth = await apiFetch<{ error: string }>('/api/bootstrap');
+  assert.equal(unauth.status, 401);
+
+  const wrongPw = await apiFetch<{ error: string }>('/api/auth/login', {
+    method: 'POST',
+    body: { email: 'admin@ic3master.edu.vn', password: 'wrong-password' },
+  });
+  assert.equal(wrongPw.status, 401);
+});
+
+test('bootstrap scopes teachers to master and strips password hashes', async () => {
+  const masterRes = await apiFetch<
+    Omit<AdminDatabase, 'teachers'> & {
+      teachers: Array<SafeTeacher & { password?: string }>;
+    }
+  >('/api/bootstrap', { token: masterToken });
+  assert.equal(masterRes.status, 200);
+  assert(masterRes.data.teachers.length >= 3);
+  for (const t of masterRes.data.teachers) {
+    assert.equal(t.password, undefined);
+  }
+
+  const lv1Res = await apiFetch<AdminDatabase>('/api/bootstrap', {
+    token: lv1Token,
+  });
+  assert.equal(lv1Res.status, 200);
+  assert.equal(lv1Res.data.teachers.length, 0);
+
+  const forbiddenSchool = await apiFetch<{ error: string }>('/api/schools', {
+    method: 'POST',
+    token: lv1Token,
+    body: { name: 'Forbidden School', district: 'Q1' },
+  });
+  assert.equal(forbiddenSchool.status, 403);
+
+  const forbiddenModule = await apiFetch<{ error: string }>('/api/modules', {
+    method: 'POST',
+    token: lv1Token,
+    body: { code: 'mod_forbidden', level: 'LV1', title: 'Test' },
+  });
+  assert.equal(forbiddenModule.status, 403);
+});
+
+test('SSRF protection blocks private Supabase URLs on test/seed endpoints', async () => {
+  const ssrfRes = await apiFetch<{ error?: string }>('/api/supabase/test', {
+    method: 'POST',
+    token: masterToken,
+    headers: {
+      'X-Supabase-Url': 'http://127.0.0.1:54321',
+      'X-Supabase-Anon-Key': 'fake-anon-key',
+    },
+  });
+  assert.equal(ssrfRes.status, 400);
+  assert(ssrfRes.data.error);
+});
+
+test('Schools -> Classes -> Students full CRUD & cascade delete', async () => {
+  const schoolRes = await apiFetch<{ id: string; name: string }>('/api/schools', {
+    method: 'POST',
+    token: masterToken,
+    body: { name: 'THCS Kiểm Thử', district: 'Quận 1' },
+  });
+  assert.equal(schoolRes.status, 201);
+  const schoolId = schoolRes.data.id;
+
+  const classRes = await apiFetch<{ id: string; schoolId: string }>(
+    '/api/classes',
+    {
+      method: 'POST',
+      token: lv1Token,
+      body: { schoolId, name: '6A9', grade: 'Khối 6' },
+    }
+  );
+  assert.equal(classRes.status, 201);
+  const classId = classRes.data.id;
+
+  const batchRes = await apiFetch<{
+    created: Array<{ id: string; passwordHash: string }>;
+    skipped: string[];
+  }>('/api/students/batch', {
+    method: 'POST',
+    token: lv1Token,
+    body: {
+      classId,
+      rows: [
+        { fullName: 'Nguyễn Minh An', studentCode: '6A9_AN' },
+        { fullName: 'Trần Thị Bình', studentCode: '6A9_BINH' },
+      ],
+    },
+  });
+  assert.equal(batchRes.status, 201);
+  assert.equal(batchRes.data.created.length, 2);
+  assert.equal(batchRes.data.created[0].passwordHash, 'nguyenminhan');
+
+  const delSchool = await apiFetch<{ ok: boolean }>(`/api/schools/${schoolId}`, {
+    method: 'DELETE',
+    token: masterToken,
+  });
+  assert.equal(delSchool.status, 200);
+
+  const dbAfter = await apiFetch<AdminDatabase>('/api/bootstrap', {
+    token: masterToken,
+  });
+  assert.equal(
+    dbAfter.data.schools.some((s) => s.id === schoolId),
+    false
+  );
+  assert.equal(
+    dbAfter.data.classes.some((c) => c.id === classId),
+    false
+  );
+});
+
+test('Question Bank 4-tier CRUD, QuestionSet membership & batch deletion', async () => {
+  const modRes = await apiFetch<{ id: string; code: string }>('/api/modules', {
+    method: 'POST',
+    token: masterToken,
+    body: {
+      code: 'custom_test_mod',
+      level: 'LV4',
+      title: 'Test Module',
+      description: 'Desc',
+    },
+  });
+  assert.equal(modRes.status, 201);
+
+  const catRes = await apiFetch<{ id: string; code: string }>(
+    '/api/knowledge-categories',
+    {
+      method: 'POST',
+      token: masterToken,
+      body: {
+        module: 'custom_test_mod',
+        code: 'TCAT',
+        title: 'Test Cat',
+        description: 'Cat desc',
+      },
+    }
+  );
+  assert.equal(catRes.status, 201);
+
+  const partRes = await apiFetch<{ id: string; code: string }>(
+    '/api/knowledge-parts',
+    {
+      method: 'POST',
+      token: masterToken,
+      body: {
+        module: 'custom_test_mod',
+        level: 'LV4',
+        category: 'TCAT',
+        code: 'TCAT1',
+        title: 'Test Part 1',
+        description: 'Part desc',
+      },
+    }
+  );
+  assert.equal(partRes.status, 201);
+
+  const q1 = await apiFetch<{ id: string; topicOrder: number }>('/api/questions', {
+    method: 'POST',
+    token: masterToken,
+    body: {
+      module: 'custom_test_mod',
+      level: 'LV4',
+      category: 'TCAT',
+      contentCode: 'TCAT1',
+      type: 'single',
+      prompt: 'Câu hỏi kiểm thử 1?',
+      payload: {
+        options: [
+          { id: 'a', text: 'Đáp án A' },
+          { id: 'b', text: 'Đáp án B' },
+        ],
+        correctOptionId: 'a',
+      },
+      explanation: 'Giải thích',
+    },
+  });
+  assert.equal(q1.status, 201);
+  assert.equal(q1.data.topicOrder, 1);
+
+  const setRes = await apiFetch<{ id: string; questionIds: string[] }>(
+    '/api/question-sets',
+    {
+      method: 'POST',
+      token: masterToken,
+      body: {
+        title: 'Bộ đề kiểm thử',
+        description: 'Mô tả',
+        questionIds: [q1.data.id],
+      },
+    }
+  );
+  assert.equal(setRes.status, 201);
+
+  const batchDel = await apiFetch<{ ok: boolean }>('/api/questions/batch-delete', {
+    method: 'POST',
+    token: masterToken,
+    body: { ids: [q1.data.id] },
+  });
+  assert.equal(batchDel.status, 200);
+
+  const dbAfter = await apiFetch<AdminDatabase>('/api/bootstrap', {
+    token: masterToken,
+  });
+  const setAfter = dbAfter.data.questionSets.find((s) => s.id === setRes.data.id);
+  assert(setAfter);
+  assert.deepEqual(setAfter.questionIds, []);
+
+  // Clean up test records in dependency order
+  await apiFetch(`/api/question-sets/${setRes.data.id}`, {
+    method: 'DELETE',
+    token: masterToken,
+  });
+  await apiFetch(`/api/knowledge-parts/${partRes.data.id}`, {
+    method: 'DELETE',
+    token: masterToken,
+  });
+  await apiFetch(`/api/knowledge-categories/${catRes.data.id}`, {
+    method: 'DELETE',
+    token: masterToken,
+  });
+  await apiFetch(`/api/modules/${modRes.data.id}`, {
+    method: 'DELETE',
+    token: masterToken,
+  });
+});
+
+test('Class tasks + student submission unlocks break state & battle room lifecycle works', async () => {
+  const beforeBoot = await apiFetch<AdminDatabase>('/api/bootstrap', {
+    token: masterToken,
+  });
+  const firstClass = beforeBoot.data.classes[0];
+  const firstStudent = beforeBoot.data.students.find(
+    (s) => s.classId === firstClass.id
+  );
+  const firstSet = beforeBoot.data.questionSets[0];
+  assert(firstClass && firstStudent && firstSet);
+
+  const saveTaskRes = await apiFetch<{ classId: string }>(
+    `/api/class-tasks/${firstClass.id}`,
+    {
+      method: 'PUT',
+      token: lv1Token,
+      body: {
+        assignmentTitle: 'Kiểm tra nhanh',
+        teacherName: 'Cô Test',
+        breakRewardMinutes: 15,
+        tasks: [
+          {
+            id: 'task_test_only',
+            classId: firstClass.id,
+            orderIndex: 1,
+            title: 'Nhiệm vụ duy nhất',
+            description: 'Mô tả',
+            level: 'LV1',
+            category: 'GM',
+            contentCode: 'GM1',
+            moduleFilter: 'computing_fundamentals',
+            quizMode: 'practice',
+            questionIds: beforeBoot.data.questions.slice(0, 2).map((q) => q.id),
+            estimatedMinutes: 5,
+            requiredAttempts: 1,
+            minScore: 600,
+          },
+        ],
+      },
+    }
+  );
+  assert.equal(saveTaskRes.status, 200);
+
+  const submitRes = await apiFetch<{
+    score: number;
+    metMinScore: boolean;
+  }>('/api/submissions', {
+    method: 'POST',
+    token: lv1Token,
+    body: {
+      studentId: firstStudent.id,
+      taskId: 'task_test_only',
+      correctCount: 2,
+      totalCount: 2,
+      durationSeconds: 30,
+    },
+  });
+  assert.equal(submitRes.status, 201);
+  assert.equal(submitRes.data.metMinScore, true);
+
+  const afterSubBoot = await apiFetch<AdminDatabase>('/api/bootstrap', {
+    token: masterToken,
+  });
+  const breakAfter = afterSubBoot.data.breakStates.find(
+    (b) => b.studentId === firstStudent.id
+  );
+  assert(breakAfter);
+  assert.equal(breakAfter.status, 'active');
+  assert.equal(breakAfter.totalGrantedSeconds, 900);
+
+  // Battle config + room lifecycle
+  const cfgRes = await apiFetch<{ classId: string; isEnabled: boolean }>(
+    `/api/battle-configs/${firstClass.id}`,
+    {
+      method: 'PUT',
+      token: masterToken,
+      body: {
+        isEnabled: true,
+        title: 'Đấu trường Test',
+        questionSetId: firstSet.id,
+        questionSetName: firstSet.title,
+        teacherName: 'Master',
+        moduleFilter: 'all',
+        questionIds: firstSet.questionIds.slice(0, 3),
+        fastComboWindowSeconds: 5,
+        topRewardCount: 2,
+        breakRewardMinutes: 20,
+        timeLimitSeconds: 60,
+      },
+    }
+  );
+  assert.equal(cfgRes.status, 200);
+
+  const createRoom = await apiFetch<{ id: string; status: string }>(
+    '/api/battle-rooms',
+    {
+      method: 'POST',
+      token: masterToken,
+      body: { classId: firstClass.id },
+    }
+  );
+  assert.equal(createRoom.status, 201);
+  assert.equal(createRoom.data.status, 'lobby');
+
+  const joinRoom = await apiFetch<{ participants: Array<{ studentId: string }> }>(
+    `/api/battle-rooms/${createRoom.data.id}/join`,
+    {
+      method: 'POST',
+      token: masterToken,
+      body: { studentId: firstStudent.id },
+    }
+  );
+  assert.equal(joinRoom.status, 200);
+  assert(
+    joinRoom.data.participants.some((p) => p.studentId === firstStudent.id)
+  );
+
+  const startRoom = await apiFetch<{ status: string }>(
+    `/api/battle-rooms/${createRoom.data.id}/start`,
+    { method: 'POST', token: masterToken }
+  );
+  assert.equal(startRoom.status, 200);
+  assert.equal(startRoom.data.status, 'playing');
+
+  const simStep = await apiFetch<{ events: Array<{ id: string }> }>(
+    `/api/battle-rooms/${createRoom.data.id}/simulate-step`,
+    { method: 'POST', token: masterToken }
+  );
+  assert.equal(simStep.status, 200);
+
+  const finishRoom = await apiFetch<{
+    status: string;
+    rankedResults: Array<{ rank: number }>;
+  }>(`/api/battle-rooms/${createRoom.data.id}/finish`, {
+    method: 'POST',
+    token: masterToken,
+  });
+  assert.equal(finishRoom.status, 200);
+  assert.equal(finishRoom.data.status, 'finished');
+  assert(finishRoom.data.rankedResults.length >= 1);
+
+  const resetRoom = await apiFetch<{ status: string }>(
+    `/api/battle-rooms/${createRoom.data.id}/reset`,
+    { method: 'POST', token: masterToken }
+  );
+  assert.equal(resetRoom.status, 200);
+  assert.equal(resetRoom.data.status, 'lobby');
+});

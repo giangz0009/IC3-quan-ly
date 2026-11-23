@@ -1,32 +1,36 @@
 # Kiến trúc Hệ thống, Mô hình Dữ liệu & API
 
 **Cập nhật lần cuối:** 2026-11-23  
-**File nguồn liên quan:** `server.ts`, `src/types/ic3.ts`, `src/data/seedData.ts`, `src/utils/api.ts`, `src/utils/supabaseClient.ts`
+**File nguồn liên quan:** `api/index.ts`, `vercel.json`, `server.ts`, `server/app.ts`, `server/supabaseStore.ts`, `server/localStore.ts`, `server/security.ts`, `src/utils/supabaseMappers.ts`, `src/types/ic3.ts`, `src/data/seedData.ts`, `src/utils/api.ts`, `src/utils/supabaseClient.ts`
 
 ---
 
-## 1. Kiến trúc Lưu trữ & Luồng Dữ liệu Lai (Hybrid Persistence)
+## 1. Kiến trúc Vercel Serverless & Lưu trữ Trực tiếp 17 bảng Supabase
 
-Ứng dụng vận hành theo mô hình **2 lớp dữ liệu**:
+Ứng dụng sử dụng chung 1 Express app factory (`createApp()` trong `server/app.ts`) cho cả **Vercel Serverless Function** (`api/index.ts` + `vercel.json`) và **máy chủ Express + Vite cục bộ** (`server.ts`):
 
-1. **Lớp máy chủ cục bộ (`Express` + `data/ic3_admin_db.json`)**:
-   - Toàn bộ thao tác trên giao diện Admin gọi qua `src/utils/api.ts` tới REST API `/api/*` của `server.ts`.
-   - Khi khởi động (`ensureDb()`), nếu chưa có `data/ic3_admin_db.json`, server tự sinh dữ liệu mẫu từ `createSeedDatabase()` (`src/data/seedData.ts`); nếu có dữ liệu cũ thiếu `modules`, `knowledgeCategories`, `knowledgeParts`, `contentCode` hoặc `topicOrder`, server tự bù migration nhẹ và lưu lại.
-   - Ghi file an toàn theo cơ chế atomic write (`ic3_admin_db.json.tmp` → `fs.renameSync`).
+1. **Chế độ Đám mây Trực tiếp (Khuyến nghị & mặc định trên Vercel)**:
+   - Backend tự nhận cấu hình Supabase theo thứ tự ưu tiên: request body → header `X-Supabase-Url` / `X-Supabase-Anon-Key` → biến môi trường server `SUPABASE_URL` + `SUPABASE_ANON_KEY` (hoặc `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`).
+   - Toàn bộ **17 bảng vận hành** (`schools`, `classes`, `students`, `admin_teachers`, `ic3_modules`, `knowledge_categories`, `knowledge_parts`, `questions`, `question_sets`, `class_task_configs`, `class_tasks`, `student_task_submissions`, `student_break_states`, `class_battle_configs`, `battle_rooms`, `battle_participants`, `battle_events`) và bucket ảnh `hotspot-images` trên **Supabase Storage** được đọc/ghi **trực tiếp** thông qua `server/supabaseStore.ts` + bộ chuyển đổi chuẩn UUID RFC4122 (`src/utils/supabaseMappers.ts`).
+   - Xác thực stateless bằng token **HMAC-SHA256** ký qua `SESSION_SECRET` (`server/security.ts`) nên tương thích 100% với môi trường Serverless nhiều instance trên Vercel mà không cần session lưu RAM.
+   - Nếu Supabase mới tạo chưa chạy `SUPABASE_SCHEMA_SQL` (`42P01` / `PGRST205`), `/api/bootstrap` tự fallback về cấu trúc rỗng/seed an toàn để Master vào ngay mục **Kết nối Supabase** sao chép SQL và nạp dữ liệu mẫu.
 
-2. **Lớp đám mây (`Supabase PostgreSQL`)**:
-   - Trình duyệt khởi tạo `SupabaseClient` trực tiếp qua `Project URL` và `Anon Key` lưu trong `localStorage` (`ic3_admin_supabase_url`, `ic3_admin_supabase_anon_key`), hoặc dùng biến môi trường phía server (`SUPABASE_URL`, `SUPABASE_ANON_KEY`).
-   - Toàn bộ **17 bảng vận hành** đều được bật RLS với policy cho phép `anon` và `authenticated` thao tác (`select, insert, update, delete`), phục vụ dùng chung với ứng dụng Học sinh và xác thực giáo viên.
-   - Phân hệ **Ngân hàng Câu hỏi** có đồng bộ 2 chiều trực tiếp từ trình duyệt (kéo về lúc khởi động và đẩy từng thay đổi CRUD live).
-   - Phân hệ **Quản lý Giáo viên & Đăng nhập (`admin_teachers`)** được `server.ts` đồng bộ trực tiếp với Supabase (kiểm tra URL hợp lệ chống truy cập nội bộ trước khi kết nối, giữ `password_hash` ở server và không gửi về trình duyệt): tự động đồng bộ từng thao tác tạo/sửa/khóa/xóa, hỗ trợ đẩy/kéo hàng loạt, và xác thực đăng nhập trực tiếp qua `public.admin_teachers` (hoặc fallback `supabase.auth.signInWithPassword`) kèm đồng bộ bộ đệm cục bộ.
-   - Các phân hệ Trường/Lớp/Học sinh/Bài tập/Cấu hình thi đấu đồng bộ đẩy lên qua nút *"Đồng bộ Dữ liệu lên Supabase"* (bao gồm cả đồng bộ `admin_teachers`).
+2. **Lớp Dự phòng Cục bộ (`server/localStore.ts` + `data/ic3_admin_db.json`)**:
+   - Chỉ kích hoạt khi chưa cấu hình Supabase trên cả biến môi trường server lẫn trình duyệt (chạy thử offline trên máy cá nhân).
+   - Khi chạy trong môi trường Serverless (`VERCEL` / `AWS_LAMBDA_FUNCTION_NAME`), fallback an toàn sang `os.tmpdir()` tránh lỗi hệ thống tệp chỉ đọc (`EROFS`).
 
 ```text
-[React UI] ──(1) API /api/*──▶ [Express server.ts] ──▶ [data/ic3_admin_db.json]
-    │                                  │
-    │                                  └──▶ [Supabase PostgreSQL: admin_teachers + Auth]
-    └──(2) @supabase/supabase-js (trực tiếp từ trình duyệt, bọc qua trackSupabaseCall)
-            └──▶ [Supabase PostgreSQL (public.*)]
+[React SPA (dist/)] ──/api/*──▶ [vercel.json → api/index.ts] (Vercel)
+                          └────▶ [Express + Vite server.ts] (Local Dev/Node)
+                                        │
+                                        ▼
+                                 [server/app.ts]
+                           ┌────────────┴────────────┐
+               (Có Supabase config)          (Chưa cấu hình)
+                           ▼                         ▼
+             [server/supabaseStore.ts]     [server/localStore.ts]
+             (17 bảng PostgreSQL +         (data/ic3_admin_db.json)
+              Storage hotspot-images)
 ```
 
 ---
@@ -63,29 +67,22 @@
 
 ---
 
-## 3. Danh mục REST API (`server.ts` ↔ `src/utils/api.ts`)
+## 3. Danh mục REST API (`server/app.ts` ↔ `api/index.ts` ↔ `src/utils/api.ts`)
 
-> Toàn bộ các route nghiệp vụ bên dưới yêu cầu header `Authorization: Bearer <token>` (trừ `GET /api/health` và `POST /api/auth/login`) và kiểm tra phân quyền trên server qua middleware `requireAuth` / `requireRoles`.
+> Toàn bộ các route nghiệp vụ bên dưới yêu cầu header `Authorization: Bearer <token>` (trừ `GET /api/health` và `POST /api/auth/login`) và kiểm tra phân quyền trên server qua middleware `requireAuth` / `requireRoles`. Khi triển khai Vercel, `vercel.json` định tuyến mọi `/api/*` vào hàm Serverless `api/index.ts`.
 
 | Nhóm | Method & Route | Quyền tối thiểu | Chức năng |
 |---|---|---|---|
-| Hệ thống | `GET /api/health` | Công khai | Kiểm tra trạng thái server |
-| Hệ thống | `GET /api/bootstrap` | `LV1 / LV2 / Master` | Trả `AdminDatabase` đã lọc theo quyền (`teachers` chỉ trả cho `master`, ẩn `password`) |
-| Xác thực | `POST /api/auth/login`, `POST /api/auth/logout` | Công khai / Đã đăng nhập | Đăng nhập bằng `email` + `password` (xác thực qua Supabase `public.admin_teachers` / `auth.signInWithPassword` khi đã cấu hình, fallback Local DB `scrypt`), chặn `locked` (`403`), đồng bộ bộ đệm cục bộ và cấp Bearer token HMAC-SHA256 |
-| Phân quyền GV | `POST /api/teachers`, `PUT /api/teachers/:userId`, `DELETE /api/teachers/:userId`, `POST /api/teachers/sync-supabase`, `POST /api/teachers/pull-supabase` | `Master` | CRUD giáo viên (tự động đồng bộ lên `public.admin_teachers` khi có Supabase) + đẩy/kéo danh sách giáo viên 2 chiều với Supabase (chặn tự hạ quyền/tự khóa & chặn hạ/khóa/xóa Master hoạt động cuối cùng) |
-| Trường học | `POST /api/schools`, `PUT /api/schools/:id`, `DELETE /api/schools/:id` | `Master` | CRUD Trường học (xóa kéo theo lớp, học sinh, bài tập, nộp bài, break, battle của trường) |
-| Lớp học | `POST /api/classes`, `PUT /api/classes/:id`, `DELETE /api/classes/:id` | `LV1 / LV2 / Master` | CRUD Lớp học liên trường (xóa kéo theo học sinh và cấu hình của lớp) |
-| Học sinh | `POST /api/students`, `POST /api/students/batch`, `PUT /api/students/:id`, `DELETE /api/students/:id` | `LV1 / LV2 / Master` | CRUD Học sinh + nhập hàng loạt CSV (tự sinh MK không dấu) |
-| Mật khẩu HS | `POST /api/students/:id/reset-password`, `POST /api/classes/:id/reset-passwords` | `LV1 / LV2 / Master` | Reset MK 1 học sinh hoặc cả lớp về mặc định không dấu |
-| Mô-đun IC3 | `POST /api/modules`, `PUT /api/modules/:id`, `DELETE /api/modules/:id` | `LV2 / Master` | CRUD Mô-đun (sửa `level` tự cập nhật cho `parts` & `questions`; chặn xóa khi còn dữ liệu con) |
-| Nhóm kiến thức | `POST /api/knowledge-categories`, `PUT /api/knowledge-categories/:id`, `DELETE /api/knowledge-categories/:id` | `LV2 / Master` | CRUD Nhóm kiến thức theo `module` (chặn xóa khi còn `parts` hoặc `questions`) |
-| Phần kiến thức | `POST /api/knowledge-parts`, `PUT /api/knowledge-parts/:id`, `DELETE /api/knowledge-parts/:id` | `LV2 / Master` | CRUD Phần kiến thức (chặn xóa khi còn `questions`) |
-| Câu hỏi | `POST /api/questions`, `PUT /api/questions/:id`, `DELETE /api/questions/:id` | `LV2 / Master` | CRUD Câu hỏi (tự đánh `topicOrder`, giữ/điều chỉnh `topicOrder`, xóa gỡ khỏi `questionSets`) |
-| Câu hỏi nâng cao | `POST /api/questions/reorder`, `POST /api/questions/batch-delete` | `LV2 / Master` | Cập nhật `topicOrder` hàng loạt & xóa nhiều câu hỏi cùng lúc |
-| Bộ đề | `POST /api/question-sets`, `PUT /api/question-sets/:id`, `DELETE /api/question-sets/:id` | `LV2 / Master` | CRUD Bộ đề luyện & thi đấu |
-| Đồng bộ Remote | `POST /api/question-bank/import-remote` | `LV2 / Master` | Ghi đè toàn bộ 5 mảng Ngân hàng Câu hỏi từ Supabase vào Local DB |
-| Bài tập & Nộp bài | `PUT /api/class-tasks/:classId`, `POST /api/submissions` | `LV1 / LV2 / Master` | Lưu cấu hình nhiệm vụ lớp; ghi nhận lượt nộp & tự mở khóa giờ giải lao khi đủ 100% |
-| Thi đấu | `PUT /api/battle-configs/:classId`, `POST /api/battle-rooms`, `POST /api/battle-rooms/:roomId/join`, `start`, `simulate-step`, `finish`, `reset` | `LV2 / Master` | Lưu luật thi đấu lớp & điều phối toàn vòng đời phòng thi đấu |
+| Hệ thống & Chẩn đoán | `GET /api/health`, `POST /api/supabase/test`, `POST /api/supabase/sample`, `POST /api/supabase/seed` | Công khai / `Master` | Kiểm tra biến môi trường (`envConfigured`, `persistence`), kiểm tra lược đồ 17 bảng, đọc thử 8 câu hỏi mẫu, và đồng bộ/nạp dữ liệu mẫu 17 bảng lên Supabase |
+| Hệ thống | `GET /api/bootstrap` | `LV1 / LV2 / Master` | Đọc `AdminDatabase` trực tiếp từ 17 bảng Supabase (hoặc fallback Local DB), lọc `teachers` chỉ trả cho `master` và ẩn `password` |
+| Xác thực | `POST /api/auth/login`, `POST /api/auth/logout` | Công khai / Đã đăng nhập | Đăng nhập qua `public.admin_teachers` / `auth.signInWithPassword` trên Supabase (fallback Local DB `scrypt`), chặn `locked` (`403`), cấp Bearer token HMAC-SHA256 |
+| Phân quyền GV | `POST /api/teachers`, `PUT /api/teachers/:userId`, `DELETE /api/teachers/:userId`, `POST /api/teachers/sync-supabase`, `POST /api/teachers/pull-supabase` | `Master` | CRUD trực tiếp trên `public.admin_teachers` + đồng bộ 2 chiều, chặn tự hạ quyền/tự khóa & bảo vệ Master hoạt động cuối cùng |
+| Trường học | `POST /api/schools`, `PUT /api/schools/:id`, `DELETE /api/schools/:id` | `Master` | CRUD trực tiếp trên `schools` (xóa kéo theo lớp, học sinh, bài tập, thi đấu qua FK cascade) |
+| Lớp học | `POST /api/classes`, `PUT /api/classes/:id`, `DELETE /api/classes/:id` | `LV1 / LV2 / Master` | CRUD trực tiếp trên `classes` liên trường |
+| Học sinh & Mật khẩu | `POST /api/students`, `POST /api/students/batch`, `PUT /api/students/:id`, `DELETE /api/students/:id`, `POST /api/students/:id/reset-password`, `POST /api/classes/:id/reset-passwords` | `LV1 / LV2 / Master` | CRUD & nhập CSV trực tiếp trên `students` + reset mật khẩu không dấu 1 HS / cả lớp |
+| Ngân hàng 4 tầng & Ảnh | `POST/PUT/DELETE` cho `/api/modules`, `/api/knowledge-categories`, `/api/knowledge-parts`, `/api/questions`, `/api/questions/reorder`, `/api/questions/batch-delete`, `/api/question-sets`, `/api/storage/hotspot-upload`, `/api/question-bank/import-remote` | `LV2 / Master` | CRUD trực tiếp trên 5 bảng Ngân hàng Câu hỏi + upload/dọn dẹp ảnh `hotspot-images` qua server (hỗ trợ chạy thuần env var trên Vercel) |
+| Bài tập & Nộp bài | `PUT /api/class-tasks/:classId`, `POST /api/submissions` | `LV1 / LV2 / Master` | Lưu `class_task_configs` + `class_tasks`; ghi nhận `student_task_submissions` & tự mở khóa `student_break_states` khi đủ 100% |
+| Thi đấu | `PUT /api/battle-configs/:classId`, `POST /api/battle-rooms`, `join`, `start`, `simulate-step`, `finish`, `reset` | `LV2 / Master` | Lưu `class_battle_configs` & điều phối `battle_rooms`, `battle_participants`, `battle_events` trực tiếp trên Supabase |
 
 ---
 

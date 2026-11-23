@@ -94,10 +94,26 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   const [subTab, setSubTab] = useState<'questions' | 'sets'>('questions');
   const [pullingSupabase, setPullingSupabase] = useState(false);
   const [pushingSupabase, setPushingSupabase] = useState(false);
-  const supabaseReady = isSupabaseConfigured();
+  const [serverSupabaseConfigured, setServerSupabaseConfigured] = useState(false);
+  const supabaseReady = isSupabaseConfigured() || serverSupabaseConfigured;
   const [liveSupabaseEnabled, setLiveSupabaseEnabled] = useState(() =>
     getQuestionBankSupabaseEnabled()
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .health()
+      .then((h) => {
+        if (!cancelled) {
+          setServerSupabaseConfigured(Boolean(h.supabaseConfigured));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [db.questions.length, db.modules?.length]);
 
   // 4-step drill-down state
   const [selectedModule, setSelectedModule] = useState<IC3Module | null>(null);
@@ -427,9 +443,16 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     }
   }
 
+  const serverDirectSupabase = serverSupabaseConfigured || isSupabaseConfigured();
+
   async function handlePullFromSupabase() {
     setPullingSupabase(true);
     try {
+      if (serverSupabaseConfigured && !isSupabaseConfigured()) {
+        await onRefresh();
+        onNotify('Đã tải lại dữ liệu Ngân hàng Câu hỏi mới nhất trực tiếp từ Supabase.');
+        return;
+      }
       const pulled = await fetchQuestionBankFromSupabase();
       if (!pulled.ok) {
         onNotify(pulled.message, true);
@@ -481,6 +504,14 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   async function handlePushToSupabase() {
     setPushingSupabase(true);
     try {
+      if (serverSupabaseConfigured && !isSupabaseConfigured()) {
+        const res = await api.seedDatabaseToSupabase({ useSeedSample: false });
+        if (res.ok) {
+          await onRefresh();
+        }
+        onNotify(res.message, !res.ok);
+        return;
+      }
       const res = await pushQuestionBankToSupabase({
         modules: db.modules,
         knowledgeCategories: db.knowledgeCategories,
@@ -563,7 +594,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
             description: moduleForm.description.trim(),
           });
       let syncErr: string | null = null;
-      if (getQuestionBankSupabaseEnabled()) {
+      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
         try {
           await upsertModuleOnSupabase(saved);
         } catch (e2) {
@@ -600,7 +631,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     try {
       await api.deleteModule(mod.id);
       let syncErr: string | null = null;
-      if (getQuestionBankSupabaseEnabled()) {
+      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
         try {
           await deleteModuleOnSupabase(mod);
         } catch (e2) {
@@ -669,7 +700,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
             description: categoryForm.description.trim(),
           });
       let syncErr: string | null = null;
-      if (getQuestionBankSupabaseEnabled()) {
+      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
         try {
           const parentMod = allModules.find((m) => m.code === saved.module);
           await syncCategoryWithParentOnSupabase(parentMod, saved);
@@ -707,7 +738,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     try {
       await api.deleteKnowledgeCategory(cat.id);
       let syncErr: string | null = null;
-      if (getQuestionBankSupabaseEnabled()) {
+      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
         try {
           await deleteKnowledgeCategoryOnSupabase(cat);
         } catch (e2) {
@@ -776,7 +807,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
             description: newPartDesc.trim(),
           });
       let syncErr: string | null = null;
-      if (getQuestionBankSupabaseEnabled()) {
+      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
         try {
           const parentMod = allModules.find((m) => m.code === saved.module);
           const parentCat = (db.knowledgeCategories ?? []).find(
@@ -817,7 +848,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     try {
       await api.deleteKnowledgePart(part.id);
       let syncErr: string | null = null;
-      if (getQuestionBankSupabaseEnabled()) {
+      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
         try {
           await deleteKnowledgePartOnSupabase(part);
         } catch (e2) {
@@ -856,26 +887,28 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
       : await api.createQuestion(payload);
 
     let syncErr: string | null = null;
-    if (getQuestionBankSupabaseEnabled()) {
-      try {
-        const freshDb = await api.bootstrap();
-        await syncQuestionWithParentsOnSupabase(freshDb, saved);
-      } catch (e2) {
-        syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-      }
-    }
-
-    const otherQuestions = db.questions.filter((item) => item.id !== saved.id);
-    const obsoleteStoragePath = getObsoleteHotspotStoragePath(
-      prevImageUrl,
-      nextImageUrl,
-      otherQuestions
-    );
     let storageCleanupErr: string | null = null;
-    if (obsoleteStoragePath && isSupabaseConfigured()) {
-      const removed = await deleteHotspotImagesFromSupabase([obsoleteStoragePath]);
-      if (!removed.ok) {
-        storageCleanupErr = removed.message || 'Không xóa được ảnh cũ khỏi Storage';
+    if (!serverDirectSupabase) {
+      if (getQuestionBankSupabaseEnabled()) {
+        try {
+          const freshDb = await api.bootstrap();
+          await syncQuestionWithParentsOnSupabase(freshDb, saved);
+        } catch (e2) {
+          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
+        }
+      }
+
+      const otherQuestions = db.questions.filter((item) => item.id !== saved.id);
+      const obsoleteStoragePath = getObsoleteHotspotStoragePath(
+        prevImageUrl,
+        nextImageUrl,
+        otherQuestions
+      );
+      if (obsoleteStoragePath && isSupabaseConfigured()) {
+        const removed = await deleteHotspotImagesFromSupabase([obsoleteStoragePath]);
+        if (!removed.ok) {
+          storageCleanupErr = removed.message || 'Không xóa được ảnh cũ khỏi Storage';
+        }
       }
     }
 
@@ -905,18 +938,20 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
         }));
       await api.deleteQuestion(q.id);
       let syncErr: string | null = null;
-      if (getQuestionBankSupabaseEnabled()) {
-        try {
-          await deleteQuestionAndSyncSetsOnSupabase(q.id, updatedAffectedSets);
-        } catch (e2) {
-          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-        }
-      }
       let storageCleanupErr: string | null = null;
-      if (storagePathsToDelete.length > 0 && isSupabaseConfigured()) {
-        const removed = await deleteHotspotImagesFromSupabase(storagePathsToDelete);
-        if (!removed.ok) {
-          storageCleanupErr = removed.message || 'Không xóa được ảnh khỏi Storage';
+      if (!serverDirectSupabase) {
+        if (getQuestionBankSupabaseEnabled()) {
+          try {
+            await deleteQuestionAndSyncSetsOnSupabase(q.id, updatedAffectedSets);
+          } catch (e2) {
+            syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
+          }
+        }
+        if (storagePathsToDelete.length > 0 && isSupabaseConfigured()) {
+          const removed = await deleteHotspotImagesFromSupabase(storagePathsToDelete);
+          if (!removed.ok) {
+            storageCleanupErr = removed.message || 'Không xóa được ảnh khỏi Storage';
+          }
         }
       }
       setSelectedQuestionIds((prev) => prev.filter((id) => id !== q.id));
@@ -973,18 +1008,20 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
         }));
       await api.batchDeleteQuestions(ids);
       let syncErr: string | null = null;
-      if (getQuestionBankSupabaseEnabled()) {
-        try {
-          await deleteQuestionsBatchAndSyncSetsOnSupabase(ids, updatedAffectedSets);
-        } catch (e2) {
-          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-        }
-      }
       let storageCleanupErr: string | null = null;
-      if (storagePathsToDelete.length > 0 && isSupabaseConfigured()) {
-        const removed = await deleteHotspotImagesFromSupabase(storagePathsToDelete);
-        if (!removed.ok) {
-          storageCleanupErr = removed.message || 'Không xóa được ảnh khỏi Storage';
+      if (!serverDirectSupabase) {
+        if (getQuestionBankSupabaseEnabled()) {
+          try {
+            await deleteQuestionsBatchAndSyncSetsOnSupabase(ids, updatedAffectedSets);
+          } catch (e2) {
+            syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
+          }
+        }
+        if (storagePathsToDelete.length > 0 && isSupabaseConfigured()) {
+          const removed = await deleteHotspotImagesFromSupabase(storagePathsToDelete);
+          if (!removed.ok) {
+            storageCleanupErr = removed.message || 'Không xóa được ảnh khỏi Storage';
+          }
         }
       }
       setSelectedQuestionIds([]);
@@ -1042,7 +1079,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     try {
       await api.reorderQuestions(updates);
       let syncErr: string | null = null;
-      if (getQuestionBankSupabaseEnabled()) {
+      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
         try {
           await reorderQuestionsOnSupabase(updates);
         } catch (e2) {
@@ -1127,7 +1164,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
         ? await api.updateQuestionSet(editingSet.id, setForm)
         : await api.createQuestionSet(setForm);
       let syncErr: string | null = null;
-      if (getQuestionBankSupabaseEnabled()) {
+      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
         try {
           await upsertQuestionSetOnSupabase(saved);
         } catch (e2) {
@@ -1160,7 +1197,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     try {
       await api.deleteQuestionSet(set.id);
       let syncErr: string | null = null;
-      if (getQuestionBankSupabaseEnabled()) {
+      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
         try {
           await deleteQuestionSetOnSupabase(set.id);
         } catch (e2) {
@@ -2215,6 +2252,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
           availableModules={allModules}
           availableCategories={db.knowledgeCategories ?? []}
           availableParts={knowledgeParts}
+          serverSupabaseActive={serverDirectSupabase}
           onClose={() => setShowQuestionModal(false)}
           onSave={handleSaveQuestion}
         />

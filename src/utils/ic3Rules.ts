@@ -17,6 +17,7 @@ import {
   type Question,
   type QuestionSet,
   type QuestionType,
+  type School,
   type SchoolClass,
   type StudentProfile,
   type TeacherAccountStatus,
@@ -1380,3 +1381,100 @@ export function isSafeRemoteSupabaseUrl(rawUrl: unknown): boolean {
     return false;
   }
 }
+
+export function filterSchools(schools: School[], query: string): School[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return schools;
+  return schools.filter(
+    (s) =>
+      s.name.toLowerCase().includes(q) || s.district.toLowerCase().includes(q)
+  );
+}
+
+export function summarizeSchoolHierarchyStats(
+  schoolId: string,
+  classes: SchoolClass[],
+  students: StudentProfile[]
+): {
+  classCount: number;
+  studentCount: number;
+  classNames: string[];
+} {
+  const schoolClasses = classes.filter((c) => c.schoolId === schoolId);
+  const classIds = new Set(schoolClasses.map((c) => c.id));
+  const studentCount = students.filter((st) => classIds.has(st.classId)).length;
+  return {
+    classCount: schoolClasses.length,
+    studentCount,
+    classNames: schoolClasses.map((c) => c.name),
+  };
+}
+
+export function filterClassesByGradeAndQuery(
+  classes: SchoolClass[],
+  gradeFilter: string,
+  query: string
+): SchoolClass[] {
+  const q = query.trim().toLowerCase();
+  return classes.filter((c) => {
+    if (gradeFilter !== 'all' && c.grade !== gradeFilter) return false;
+    if (
+      q &&
+      !c.name.toLowerCase().includes(q) &&
+      !c.grade.toLowerCase().includes(q)
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+export function summarizeClassStudentStats(
+  classId: string,
+  students: StudentProfile[]
+): {
+  studentCount: number;
+  customPasswordCount: number;
+  breakReadyCount: number;
+} {
+  const list = students.filter((s) => s.classId === classId);
+  let customPasswordCount = 0;
+  let breakReadyCount = 0;
+  for (const st of list) {
+    if (st.isCustomPassword) customPasswordCount += 1;
+    if (st.alwaysBreakReady) breakReadyCount += 1;
+  }
+  return {
+    studentCount: list.length,
+    customPasswordCount,
+    breakReadyCount,
+  };
+}
+
+export type StudentStatusFilter =
+  | 'all'
+  | 'default_pw'
+  | 'custom_pw'
+  | 'break_ready';
+
+export function filterStudentsByStatusAndQuery(
+  students: StudentProfile[],
+  statusFilter: StudentStatusFilter,
+  query: string
+): StudentProfile[] {
+  const q = query.trim().toLowerCase();
+  return students.filter((st) => {
+    if (statusFilter === 'default_pw' && st.isCustomPassword) return false;
+    if (statusFilter === 'custom_pw' && !st.isCustomPassword) return false;
+    if (statusFilter === 'break_ready' && !st.alwaysBreakReady) return false;
+    if (
+      q &&
+      !st.fullName.toLowerCase().includes(q) &&
+      !st.studentCode.toLowerCase().includes(q)
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+

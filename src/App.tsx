@@ -139,12 +139,13 @@ export default function App() {
     }
   }, []);
 
-  // Support ?autostart=1 for immediate inspection & optional auto-pull from Supabase
+  // Support ?autostart=1 for immediate inspection & optional fallback pull when server uses local store
   useEffect(() => {
     if (teacher) {
       let cancelled = false;
       (async () => {
-        if (getQuestionBankSupabaseEnabled()) {
+        const health = await api.health().catch(() => null);
+        if (!cancelled && !health?.supabaseConfigured && getQuestionBankSupabaseEnabled()) {
           setSyncingStartupSupabase(true);
           try {
             const pulled = await fetchQuestionBankFromSupabase();

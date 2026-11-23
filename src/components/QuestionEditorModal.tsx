@@ -20,6 +20,7 @@ import {
   type QuestionType,
   type TrueFalseStatement,
 } from '../types/ic3';
+import { api } from '../utils/api';
 import {
   extractImageFileFromClipboardData,
   getDefaultInstructionForQuestionType,
@@ -81,6 +82,7 @@ interface QuestionEditorModalProps {
   availableModules?: IC3ModuleRecord[];
   availableCategories?: KnowledgeCategoryRecord[];
   availableParts?: KnowledgePart[];
+  serverSupabaseActive?: boolean;
   onClose: () => void;
   onSave: (payload: Omit<Question, 'id' | 'createdAt' | 'updatedAt'>, existingId?: string) => Promise<void>;
 }
@@ -91,10 +93,31 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
   availableModules = [],
   availableCategories = [],
   availableParts = [],
+  serverSupabaseActive = false,
   onClose,
   onSave,
 }) => {
   const isContextLocked = !initialQuestion && Boolean(defaultContext);
+  const [serverEnvReady, setServerEnvReady] = useState(serverSupabaseActive);
+
+  useEffect(() => {
+    if (serverSupabaseActive || isSupabaseConfigured()) {
+      setServerEnvReady(true);
+      return;
+    }
+    let cancelled = false;
+    api
+      .health()
+      .then((h) => {
+        if (!cancelled && h.supabaseConfigured) {
+          setServerEnvReady(true);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [serverSupabaseActive]);
 
   const [module, setModule] = useState<IC3Module>(
     initialQuestion?.module ?? defaultContext?.module ?? 'computing_fundamentals'
@@ -246,7 +269,7 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
     setHotspotType(undefined);
     setHasHotspotTarget(false);
     setHotspotUploadNote(
-      isSupabaseConfigured()
+      isSupabaseConfigured() || serverEnvReady
         ? `Đã ${actionVerb} xem trước (chưa lưu vào Storage). Hãy nhấp vào điểm đúng trên hình rồi bấm "Lưu Câu hỏi" để tải lên Supabase.`
         : `Đã ${actionVerb} xem trước. Hãy nhấp vào điểm đúng trên hình rồi bấm "Lưu Câu hỏi".`
     );
@@ -390,20 +413,33 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
         setUploadingHotspotImage(true);
         try {
           let resolvedImageUrl = '';
-          const shouldUploadToStorage = shouldUploadHotspotFileOnSave({
+          const browserReady = isSupabaseConfigured();
+          const canUploadStorage = shouldUploadHotspotFileOnSave({
             questionType: type,
             hasPendingFile: Boolean(pendingHotspotFile),
-            supabaseConfigured: isSupabaseConfigured(),
+            supabaseConfigured: browserReady || serverEnvReady,
             promptValid: Boolean(prompt.trim()),
             hotspotImageReady: Boolean(displayedHotspotImageUrl || hotspotType),
             hotspotTargetReady: hasHotspotTarget,
           });
-          if (shouldUploadToStorage) {
+          if (canUploadStorage && browserReady) {
             const uploaded = await uploadHotspotImageToSupabase(pendingHotspotFile);
             if (uploaded.ok && uploaded.url) {
               resolvedImageUrl = uploaded.url;
             } else {
               resolvedImageUrl = await fileToCompressedDataUrl(pendingHotspotFile);
+            }
+          } else if (canUploadStorage && serverEnvReady) {
+            const compressed = await fileToCompressedDataUrl(pendingHotspotFile);
+            try {
+              const uploaded = await api.uploadHotspotImage({
+                base64DataUrl: compressed,
+                fileName: pendingHotspotFile.name,
+                mimeType: pendingHotspotFile.type || 'image/webp',
+              });
+              resolvedImageUrl = uploaded.ok && uploaded.url ? uploaded.url : compressed;
+            } catch {
+              resolvedImageUrl = compressed;
             }
           } else {
             resolvedImageUrl = await fileToCompressedDataUrl(pendingHotspotFile);

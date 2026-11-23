@@ -9,10 +9,10 @@
 
 | Lớp | File | Thành phần / Hàm chính |
 |---|---|---|
-| Frontend | `src/components/SchoolsStudentsView.tsx` | Giao diện 12 cột (4 cột Trường/Lớp + 8 cột Học sinh), Modal Thêm/Sửa Trường/Lớp/Học sinh, nhập CSV, Reset MK và nút chuyển nhanh sang tab Quản lý Giáo viên (cho Master) |
+| Frontend | `src/components/SchoolsStudentsView.tsx` | Giao diện phân cấp 3 bước (Trường học → Lớp học → Học sinh) kèm thanh Breadcrumb + Quay lại giống Ngân hàng câu hỏi, Modal Thêm/Sửa Trường/Lớp/Học sinh, Confirm Modal Xóa & Reset mật khẩu cả lớp, nhập CSV và nút chuyển nhanh sang tab Quản lý Giáo viên (cho Master) |
 | Frontend | `src/components/TeacherManagementView.tsx` | Tab Quản lý Giáo viên riêng cho `master` (tìm kiếm, lọc 3 cấp quyền, Modal Cấp/Sửa tài khoản, Confirm Modal Xóa, nút icon Chi tiết quyền, đồng bộ 2 chiều với Supabase `public.admin_teachers`) |
-| Logic thuần | `src/utils/ic3Rules.ts` | `normalizeVietnamesePassword()`, `parseStudentsCsv()`, `getTeacherPermissions()`, `getTeacherPermissionDetails()`, `canDeleteOrDemoteMaster()`, `filterTeachers()`, `summarizeTeachersByRole()`, `summarizeTeacherStatuses()`, `buildAdminTeachersSupabasePayload()`, `mergeRemoteTeachersWithLocal()` |
-| Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test chuẩn hóa mật khẩu tiếng Việt (`Đỗ Gia Huy` → `dogiahuy`), phân tích CSV, phân quyền 3 cấp & đồng bộ `admin_teachers` |
+| Logic thuần | `src/utils/ic3Rules.ts` | `normalizeVietnamesePassword()`, `parseStudentsCsv()`, `filterSchools()`, `summarizeSchoolHierarchyStats()`, `filterClassesByGradeAndQuery()`, `summarizeClassStudentStats()`, `filterStudentsByStatusAndQuery()`, `getTeacherPermissions()`, `getTeacherPermissionDetails()`, `canDeleteOrDemoteMaster()`, `filterTeachers()`, `summarizeTeachersByRole()`, `summarizeTeacherStatuses()`, `buildAdminTeachersSupabasePayload()`, `mergeRemoteTeachersWithLocal()` |
+| Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test chuẩn hóa mật khẩu tiếng Việt (`Đỗ Gia Huy` → `dogiahuy`), phân tích CSV, tổng hợp & lọc phân cấp Trường → Lớp → Học sinh, phân quyền 3 cấp & đồng bộ `admin_teachers` |
 | API Client | `src/utils/api.ts` | `createSchool`, `updateSchool`, `deleteSchool`, `createClass`, `updateClass`, `deleteClass`, `createStudent`, `batchImportStudents`, `updateStudent`, `deleteStudent`, `resetStudentPassword`, `resetClassPasswords`, `createTeacher`, `updateTeacher`, `deleteTeacher`, `syncTeachersToSupabase`, `pullTeachersFromSupabase` |
 | Backend | `server.ts` | Các route `/api/schools*` (`master`), `/api/classes*`, `/api/students*` (mọi GV), `/api/teachers*` (`master`, kèm đồng bộ `public.admin_teachers`) |
 
@@ -20,24 +20,27 @@
 
 ## 2. Mô tả Nghiệp vụ & Giao diện
 
-### 2.1. Quản lý Phân cấp Trường → Lớp (Cột trái 4/12)
-- **Trường học:**
-  - **Mọi tài khoản giáo viên (LV1, LV2, Master)** đều nhìn thấy và chuyển đổi trực tiếp giữa **tất cả các trường** hiện có trong hệ thống để quản lý lớp học và học sinh.
-  - Chỉ **Giáo viên Master** (`permissions.canManageSchools`) mới có nút **Thêm Trường học**, nút **Sửa** và nút xóa trường (thêm/sửa thực hiện qua Modal Box).
+### 2.1. Quản lý Phân cấp 3 bước: Trường học → Lớp học → Học sinh
+Tổ chức theo mô hình đi sâu từ tổng quát đến chi tiết (tương đồng với **Ngân hàng Câu hỏi**), kết hợp thanh đường dẫn Breadcrumb (`Tất cả Trường học > [Trường] > Lớp [Tên lớp]`) và nút **Quay lại**:
+- **Bước 1 — Danh sách Trường học (Tổng quát nhất):**
+  - Hiển thị lưới thẻ các trường kèm quận/huyện, tổng số lớp, tổng sĩ số học sinh và danh sách tên các lớp trực thuộc; hỗ trợ tìm kiếm trường theo tên/quận huyện.
+  - **Mọi tài khoản giáo viên (LV1, LV2, Master)** đều xem và mở bất kỳ trường nào để quản lý lớp học và học sinh.
+  - Chỉ **Giáo viên Master** (`permissions.canManageSchools`) mới có nút **Thêm Trường học**, nút **Sửa** (Modal Box) và nút **Xóa** (Confirm Modal Box cảnh báo xóa kéo theo lớp và học sinh).
   - **Xóa trường (Cascade trên `server.ts`):** Tự động xóa toàn bộ lớp thuộc trường, học sinh thuộc các lớp đó, `classTaskConfigs`, `submissions`, `breakStates`, `battleConfigs`, `battleRooms` liên quan.
-- **Lớp học:**
-  - Hiển thị các lớp của trường đang chọn kèm khối lớp và sĩ số.
-  - Cho phép cả 3 cấp giáo viên **Thêm / Sửa Lớp học** qua Modal Box (Tên lớp + Khối 6/7/8/9) và **Xóa lớp** (xóa kéo theo học sinh và các cấu hình của lớp).
+- **Bước 2 — Danh sách Lớp học của Trường đang chọn (Cấp trung gian):**
+  - Khi bấm vào một thẻ Trường ở Bước 1, hệ thống chuyển sang lưới thẻ các lớp của trường đó kèm khối lớp, sĩ số học sinh, số học sinh đã tự đổi mật khẩu và số tài khoản bật giải lao demo.
+  - Hỗ trợ tìm kiếm theo tên lớp và thanh lọc theo **Khối lớp** (`Tất cả`, `Khối 6`, `Khối 7`, `Khối 8`, `Khối 9`).
+  - Cho phép cả 3 cấp giáo viên **Thêm / Sửa Lớp học** qua Modal Box (Tên lớp + Khối 6/7/8/9) và **Xóa lớp** qua Confirm Modal Box (xóa kéo theo học sinh và các cấu hình của lớp).
 
-### 2.2. Quản lý Học sinh (Cột phải 8/12)
-- Thanh tìm kiếm tức thời theo họ tên hoặc mã học sinh.
+### 2.2. Quản lý Học sinh trong Lớp (Bước 3 — Chi tiết nhất)
+- Mở toàn chiều rộng bảng học sinh khi chọn một thẻ Lớp ở Bước 2, gồm thẻ tóm tắt lớp (nút **Reset mật khẩu cả lớp** kèm Confirm Modal xác nhận), thanh tìm kiếm theo họ tên/mã HS và bộ lọc trạng thái (*Tất cả học sinh*, *Dùng mật khẩu mặc định*, *Đã tự đổi mật khẩu*, *Đang bật giải lao demo*).
 - **Thêm / Sửa 1 học sinh (qua Modal Box):** Nhập hoặc cập nhật Họ tên, Mã HS (duy nhất trong lớp, tự viết hoa) và cờ `alwaysBreakReady` (*tài khoản kiểm thử giải lao*); khi thêm mới tự động xem trước mật khẩu mặc định sinh ra.
 - **Nhập hàng loạt từ CSV (`Nhập CSV`):**
   - Dán danh sách từ Excel/CSV (hỗ trợ dấu `,`, `;`, hoặc tab `\t`), xem bảng xem trước (Mã HS, Họ tên, Mật khẩu mặc định) trước khi bấm nhập.
   - Server bỏ qua các mã học sinh đã tồn tại trong lớp và trả về `{ created, skipped }`.
-- **Quản lý mật khẩu:**
+- **Quản lý mật khẩu & Xóa an toàn:**
   - Hiển thị rõ học sinh đang dùng mật khẩu mặc định hay `Đã tự đổi (...)`.
-  - Hỗ trợ **Reset MK** cho từng học sinh hoặc **Reset mật khẩu cả lớp** (đặt `passwordHash = normalizeVietnamesePassword(fullName)` và `isCustomPassword = false`).
+  - Hỗ trợ **Reset MK** cho từng học sinh hoặc **Reset mật khẩu cả lớp** (đặt `passwordHash = normalizeVietnamesePassword(fullName)` và `isCustomPassword = false`), và **Xóa** học sinh qua Confirm Modal Box.
 - **Cờ `alwaysBreakReady`:** Cho phép bật/tắt nhanh ngay trên từng dòng (`Luôn mở khóa` ↔ `Theo nhiệm vụ`) để phục vụ kiểm thử khu vực giải lao.
 
 ### 2.3. Tab Quản lý Giáo viên (`TeacherManagementView.tsx` — Chỉ dành cho `Giáo viên Master`)

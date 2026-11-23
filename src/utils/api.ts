@@ -16,6 +16,8 @@ import type {
   TeacherAccountStatus,
 } from '../types/ic3';
 
+import { getSavedSupabaseSettings } from './supabaseClient';
+
 export type SafeTeacher = Omit<AdminTeacher, 'password'>;
 
 export interface SupabaseSyncStatus {
@@ -28,6 +30,14 @@ export interface SupabaseSyncStatus {
 export interface SupabaseConfigInput {
   url?: string;
   anonKey?: string;
+}
+
+export interface ServerHealthStatus {
+  ok: boolean;
+  timestamp: string;
+  persistence: 'supabase' | 'local';
+  supabaseConfigured: boolean;
+  envConfigured: boolean;
 }
 
 function toSupabaseBody(config?: SupabaseConfigInput) {
@@ -52,11 +62,20 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const authHeaders: Record<string, string> = memoryAuthToken
     ? { Authorization: `Bearer ${memoryAuthToken}` }
     : {};
+  const savedSb = getSavedSupabaseSettings();
+  const sbHeaders: Record<string, string> =
+    savedSb.url.trim() && savedSb.anonKey.trim()
+      ? {
+          'X-Supabase-Url': savedSb.url.trim(),
+          'X-Supabase-Anon-Key': savedSb.anonKey.trim(),
+        }
+      : {};
   const res = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
       ...authHeaders,
+      ...sbHeaders,
       ...(options?.headers ?? {}),
     },
   });
@@ -71,6 +90,102 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  health() {
+    return request<ServerHealthStatus>('/api/health');
+  },
+
+  testSupabase(supabaseConfig?: SupabaseConfigInput) {
+    return request<{
+      ok: boolean;
+      message: string;
+      latencyMs?: number;
+      tablesChecked: number;
+      readyTables: number;
+      tableChecks: Array<{
+        table: string;
+        label: string;
+        ok: boolean;
+        remoteCount: number | null;
+        localCount: number | null;
+        error?: string;
+      }>;
+    }>('/api/supabase/test', {
+      method: 'POST',
+      body: JSON.stringify(toSupabaseBody(supabaseConfig)),
+    });
+  },
+
+  fetchSupabaseSample(supabaseConfig?: SupabaseConfigInput) {
+    return request<{
+      ok: boolean;
+      message: string;
+      parts: Array<{
+        id: string;
+        level: string;
+        category: string;
+        code: string;
+        title: string;
+      }>;
+      questions: Array<{
+        id: string;
+        level: string;
+        category: string;
+        content_code: string;
+        topic_order: number;
+        type: string;
+        prompt: string;
+      }>;
+    }>('/api/supabase/sample', {
+      method: 'POST',
+      body: JSON.stringify(toSupabaseBody(supabaseConfig)),
+    });
+  },
+
+  seedDatabaseToSupabase(
+    options?: { useSeedSample?: boolean },
+    supabaseConfig?: SupabaseConfigInput
+  ) {
+    return request<{
+      ok: boolean;
+      message: string;
+      report?: {
+        ok: boolean;
+        message: string;
+        latencyMs?: number;
+        tablesChecked: number;
+        readyTables: number;
+        tableChecks: Array<{
+          table: string;
+          label: string;
+          ok: boolean;
+          remoteCount: number | null;
+          localCount: number | null;
+          error?: string;
+        }>;
+      };
+    }>('/api/supabase/seed', {
+      method: 'POST',
+      body: JSON.stringify({
+        useSeedSample: Boolean(options?.useSeedSample),
+        ...toSupabaseBody(supabaseConfig),
+      }),
+    });
+  },
+
+  uploadHotspotImage(payload: {
+    base64DataUrl: string;
+    fileName?: string;
+    mimeType?: string;
+  }) {
+    return request<{ ok: boolean; url?: string; message?: string }>(
+      '/api/storage/hotspot-upload',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
   async login(
     email: string,
     password: string,

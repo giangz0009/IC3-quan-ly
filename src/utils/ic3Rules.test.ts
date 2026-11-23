@@ -11,6 +11,9 @@ import {
   evaluateTaskCompletion,
   extractHotspotStoragePathFromUrl,
   extractImageFileFromClipboardData,
+  filterClassesByGradeAndQuery,
+  filterSchools,
+  filterStudentsByStatusAndQuery,
   filterTeachers,
   formatQuestionOrderSummary,
   formatSubmissionsToCsv,
@@ -37,6 +40,8 @@ import {
   resolveToastVariant,
   shouldUploadHotspotFileOnSave,
   sliceQuestionsByOrderRange,
+  summarizeClassStudentStats,
+  summarizeSchoolHierarchyStats,
   summarizeTeachersByRole,
   summarizeTeacherStatuses,
   toggleSelectAllVisibleIds,
@@ -998,4 +1003,76 @@ test('isSafeRemoteSupabaseUrl accepts public HTTPS URLs and blocks loopback or p
   assert.equal(isSafeRemoteSupabaseUrl('javascript:alert(1)'), false);
   assert.equal(isSafeRemoteSupabaseUrl(''), false);
 });
+
+test('Schools -> Classes -> Students hierarchy summary and filter helpers work accurately', () => {
+  const schools = [
+    { id: 's1', name: 'THCS Nguyễn Du', district: 'Quận 1, TP.HCM', createdAt: '2026-01-01' },
+    { id: 's2', name: 'THCS Lê Quý Đôn', district: 'Quận 3, TP.HCM', createdAt: '2026-01-01' },
+  ];
+  const classes = [
+    { id: 'c1', schoolId: 's1', name: '6A1', grade: 'Khối 6', createdAt: '2026-01-01' },
+    { id: 'c2', schoolId: 's1', name: '7A2', grade: 'Khối 7', createdAt: '2026-01-01' },
+    { id: 'c3', schoolId: 's2', name: '8A1', grade: 'Khối 8', createdAt: '2026-01-01' },
+  ];
+  const students = [
+    {
+      id: 'st1',
+      classId: 'c1',
+      fullName: 'Đỗ Gia Huy',
+      studentCode: '6A1-01',
+      passwordHash: 'dogiahuy',
+      isCustomPassword: false,
+      alwaysBreakReady: false,
+      createdAt: '2026-01-01',
+    },
+    {
+      id: 'st2',
+      classId: 'c1',
+      fullName: 'Lê Minh Anh',
+      studentCode: '6A1-02',
+      passwordHash: 'custom123',
+      isCustomPassword: true,
+      alwaysBreakReady: true,
+      createdAt: '2026-01-01',
+    },
+    {
+      id: 'st3',
+      classId: 'c3',
+      fullName: 'Trần Bảo An',
+      studentCode: '8A1-01',
+      passwordHash: 'tranbaoan',
+      isCustomPassword: false,
+      alwaysBreakReady: false,
+      createdAt: '2026-01-01',
+    },
+  ];
+
+  assert.equal(filterSchools(schools, 'quận 3').length, 1);
+  assert.equal(filterSchools(schools, 'nguyễn du')[0].id, 's1');
+
+  const s1Stats = summarizeSchoolHierarchyStats('s1', classes, students);
+  assert.deepEqual(s1Stats, {
+    classCount: 2,
+    studentCount: 2,
+    classNames: ['6A1', '7A2'],
+  });
+
+  const s1Classes = classes.filter((c) => c.schoolId === 's1');
+  assert.equal(filterClassesByGradeAndQuery(s1Classes, 'Khối 7', '').length, 1);
+  assert.equal(filterClassesByGradeAndQuery(s1Classes, 'all', '6a').length, 1);
+
+  const c1Stats = summarizeClassStudentStats('c1', students);
+  assert.deepEqual(c1Stats, {
+    studentCount: 2,
+    customPasswordCount: 1,
+    breakReadyCount: 1,
+  });
+
+  const c1Students = students.filter((st) => st.classId === 'c1');
+  assert.equal(filterStudentsByStatusAndQuery(c1Students, 'default_pw', '').length, 1);
+  assert.equal(filterStudentsByStatusAndQuery(c1Students, 'custom_pw', '').length, 1);
+  assert.equal(filterStudentsByStatusAndQuery(c1Students, 'break_ready', '').length, 1);
+  assert.equal(filterStudentsByStatusAndQuery(c1Students, 'all', '6a1-01').length, 1);
+});
+
 
