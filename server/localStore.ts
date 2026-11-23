@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createSeedDatabase } from '../src/data/seedData';
-import type { AdminDatabase, AdminTeacher } from '../src/types/ic3';
-import { normalizeAdminRole, normalizeTeacherStatus } from '../src/utils/ic3Rules';
-import { hashTeacherPassword } from './security';
+import { createSeedDatabase } from '../src/data/seedData.js';
+import type { AdminDatabase, AdminTeacher } from '../src/types/ic3.js';
+import { normalizeAdminRole, normalizeTeacherStatus } from '../src/utils/ic3Rules.js';
+import { hashTeacherPassword } from './security.js';
 
 const IS_SERVERLESS = Boolean(
   process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME

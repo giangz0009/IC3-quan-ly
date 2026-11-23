@@ -17,7 +17,7 @@ import type {
   SchoolClass,
   StudentProfile,
   TeacherAccountStatus,
-} from '../src/types/ic3';
+} from '../src/types/ic3.js';
 import {
   calculateIC3Score,
   canDeleteOrDemoteMaster,
@@ -30,21 +30,22 @@ import {
   normalizeTeacherStatus,
   normalizeVietnamesePassword,
   rankBattleParticipants,
-} from '../src/utils/ic3Rules';
+} from '../src/utils/ic3Rules.js';
 import {
   createHashedSeedDatabase,
   getLocalDb,
   sanitizeTeachers,
   saveLocalDb,
-} from './localStore';
+} from './localStore.js';
 import {
   hashTeacherPassword,
   makeId,
   revokedTokens,
   signSessionToken,
+  verifySessionPayload,
   verifySessionToken,
   verifyTeacherPassword,
-} from './security';
+} from './security.js';
 import {
   SupabaseStoreError,
   type SupabaseSyncStatus,
@@ -71,6 +72,7 @@ import {
   deleteTeacherOnSupabaseServer,
   fetchAdminDatabaseFromSupabase,
   fetchSupabaseSampleQuestionsOnServer,
+  findAdminTeacherInSupabaseByEmail,
   finishBattleRoomOnSupabase,
   getTeacherFromSupabaseById,
   importQuestionBankToSupabase,
@@ -97,7 +99,7 @@ import {
   updateStudentOnSupabase,
   uploadHotspotImageOnSupabaseServer,
   upsertSingleTeacherOnSupabaseServer,
-} from './supabaseStore';
+} from './supabaseStore.js';
 
 interface AuthedRequest extends express.Request {
   authTeacher?: Omit<AdminTeacher, 'password'>;
@@ -206,7 +208,7 @@ function upsertRemoteTeacherIntoLocalDb(
 ): AdminTeacher | null {
   const db = getLocalDb();
   const email = String(remoteRow.email ?? '').trim().toLowerCase();
-  const userId = String(remoteRow.user_id ?? '').trim();
+  const userId = String(remoteRow.user_id ?? remoteRow.id ?? email).trim();
   if (!email || !userId) return null;
 
   const remoteHash =
@@ -224,7 +226,7 @@ function upsertRemoteTeacherIntoLocalDb(
       : existing?.password || '';
 
   const nextTeacher: AdminTeacher = {
-    userId: existing?.userId || userId,
+    userId: userId || existing?.userId || email,
     fullName:
       String(remoteRow.full_name ?? existing?.fullName ?? email).trim() || email,
     email,
@@ -251,24 +253,40 @@ function upsertRemoteTeacherIntoLocalDb(
 
 async function resolveAuthenticatedTeacher(
   req: AuthedRequest,
-  userId: string
+  userId: string,
+  emailHint?: string
 ): Promise<AdminTeacher | null> {
+  const findLocal = () => {
+    const teachers = getLocalDb().teachers;
+    return (
+      teachers.find((t) => t.userId === userId) ??
+      (emailHint
+        ? teachers.find(
+            (t) =>
+              t.email.trim().toLowerCase() === emailHint.trim().toLowerCase()
+          )
+        : undefined) ??
+      null
+    );
+  };
+
   const { client: sbClient } = resolveSupabaseFromRequest(req);
   if (sbClient) {
     try {
       const { teacher, tableHasRows } = await getTeacherFromSupabaseById(
         sbClient,
-        userId
+        userId,
+        emailHint
       );
       if (teacher) return teacher;
       if (tableHasRows) return null;
       // If admin_teachers table is still empty (0 rows), fall back to seed teachers
-      return getLocalDb().teachers.find((t) => t.userId === userId) ?? null;
+      return findLocal();
     } catch {
-      return getLocalDb().teachers.find((t) => t.userId === userId) ?? null;
+      return findLocal();
     }
   }
-  return getLocalDb().teachers.find((t) => t.userId === userId) ?? null;
+  return findLocal();
 }
 
 function requireAuth(
@@ -281,15 +299,15 @@ function requireAuth(
     typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
       ? authHeader.slice(7).trim()
       : '';
-  const userId = verifySessionToken(token);
-  if (!userId) {
+  const session = verifySessionPayload(token);
+  if (!session) {
     return res.status(401).json({
       error:
         'Phiên đăng nhập hết hạn hoặc chưa xác thực. Vui lòng đăng nhập lại.',
     });
   }
 
-  void resolveAuthenticatedTeacher(req, userId)
+  void resolveAuthenticatedTeacher(req, session.userId, session.email)
     .then((found) => {
       if (!found) {
         return res.status(401).json({
@@ -335,10 +353,26 @@ export function createApp(): express.Express {
   const app = express();
   app.use(express.json({ limit: '15mb' }));
 
-  // Support both /api/* and rewritten serverless root paths if any proxy strips /api
+  // Support rewritten serverless paths (?__path=...) and stripped /api prefixes
   app.use((req, _res, next) => {
-    if (req.url && !req.url.startsWith('/api') && req.url.startsWith('/health')) {
-      req.url = `/api${req.url}`;
+    if (req.url) {
+      try {
+        const parsed = new URL(req.url, 'http://localhost');
+        const pathParam = parsed.searchParams.get('__path');
+        if (pathParam !== null) {
+          parsed.searchParams.delete('__path');
+          const cleanSub = pathParam.replace(/^\/+/, '');
+          const qs = parsed.searchParams.toString();
+          req.url = `/api/${cleanSub}${qs ? `?${qs}` : ''}`;
+        } else if (
+          !req.url.startsWith('/api') &&
+          (req.url.startsWith('/health') || req.url.startsWith('/auth/'))
+        ) {
+          req.url = `/api${req.url}`;
+        }
+      } catch {
+        // Ignore malformed URLs and pass through
+      }
     }
     next();
   });
@@ -376,23 +410,19 @@ export function createApp(): express.Express {
 
       if (sbClient) {
         try {
-          const escapedPattern = cleanEmail.replace(/[\\%_]/g, '\\$&');
-          const [{ data: remoteRow, error: remoteErr }, { count: teacherCount }] =
-            await Promise.all([
-              sbClient
-                .from('admin_teachers')
-                .select(
-                  'user_id, full_name, email, password_hash, role, status, created_at'
-                )
-                .ilike('email', escapedPattern)
-                .maybeSingle(),
-              sbClient
-                .from('admin_teachers')
-                .select('user_id', { count: 'exact', head: true }),
-            ]);
-          supabaseTableHasRows = (teacherCount ?? 0) > 0;
+          let remoteRow: Record<string, unknown> | null = null;
+          try {
+            const foundRemote = await findAdminTeacherInSupabaseByEmail(
+              sbClient,
+              cleanEmail
+            );
+            remoteRow = foundRemote.row;
+            supabaseTableHasRows = foundRemote.tableHasRows;
+          } catch {
+            // Table may not exist yet; allow auth/local fallback below
+          }
 
-          if (!remoteErr && remoteRow) {
+          if (remoteRow) {
             const remoteHash =
               typeof remoteRow.password_hash === 'string'
                 ? remoteRow.password_hash.trim()
@@ -402,13 +432,17 @@ export function createApp(): express.Express {
               : false;
 
             if (!verified) {
-              const { data: authData, error: authErr } =
-                await sbClient.auth.signInWithPassword({
-                  email: cleanEmail,
-                  password,
-                });
-              if (!authErr && authData.user) {
-                verified = true;
+              try {
+                const { data: authData, error: authErr } =
+                  await sbClient.auth.signInWithPassword({
+                    email: cleanEmail,
+                    password,
+                  });
+                if (!authErr && authData.user) {
+                  verified = true;
+                }
+              } catch {
+                // Ignore Supabase Auth errors here
               }
             }
 
@@ -430,10 +464,7 @@ export function createApp(): express.Express {
               });
             }
 
-            const synced = upsertRemoteTeacherIntoLocalDb(
-              remoteRow as Record<string, unknown>,
-              password
-            );
+            const synced = upsertRemoteTeacherIntoLocalDb(remoteRow, password);
             if (!synced) {
               return res.status(500).json({
                 error: 'Dữ liệu tài khoản giáo viên trên Supabase không hợp lệ.',
@@ -448,7 +479,7 @@ export function createApp(): express.Express {
               });
             }
 
-            const token = signSessionToken(synced.userId);
+            const token = signSessionToken(synced.userId, synced.email);
             const { password: _pw, ...safeTeacher } = synced;
             return res.json({
               teacher: {
@@ -468,32 +499,50 @@ export function createApp(): express.Express {
               password,
             });
           if (!authErr && authData.user) {
-            const { data: byUidRow } = await sbClient
-              .from('admin_teachers')
-              .select(
-                'user_id, full_name, email, password_hash, role, status, created_at'
-              )
-              .eq('user_id', authData.user.id)
-              .maybeSingle();
+            const byUidLookup = await getTeacherFromSupabaseById(
+              sbClient,
+              authData.user.id,
+              cleanEmail
+            ).catch(() => ({ teacher: null, tableHasRows: supabaseTableHasRows }));
 
+            const existingRemote = byUidLookup.teacher;
             const localFallback = localDb.teachers.find(
               (t) => t.email.trim().toLowerCase() === cleanEmail
             );
-            const mergedRow: Record<string, unknown> = byUidRow ?? {
-              user_id: localFallback?.userId || authData.user.id,
-              full_name:
-                (authData.user.user_metadata?.full_name as string | undefined) ||
-                localFallback?.fullName ||
-                cleanEmail,
-              email: authData.user.email || cleanEmail,
-              password_hash: '',
-              role: localFallback?.role || 'teacher_lv1',
-              status: localFallback?.status || 'active',
-              created_at: localFallback?.createdAt || new Date().toISOString(),
-            };
+            const mergedRow: Record<string, unknown> = existingRemote
+              ? {
+                  user_id: existingRemote.userId,
+                  full_name: existingRemote.fullName,
+                  email: existingRemote.email,
+                  password_hash: existingRemote.password,
+                  role: existingRemote.role,
+                  status: existingRemote.status,
+                  created_at: existingRemote.createdAt,
+                }
+              : {
+                  user_id: authData.user.id,
+                  full_name:
+                    (authData.user.user_metadata?.full_name as
+                      | string
+                      | undefined) ||
+                    localFallback?.fullName ||
+                    cleanEmail,
+                  email: authData.user.email || cleanEmail,
+                  password_hash: hashTeacherPassword(password),
+                  role: localFallback?.role || 'teacher_lv1',
+                  status: localFallback?.status || 'active',
+                  created_at:
+                    localFallback?.createdAt || new Date().toISOString(),
+                };
 
             const synced = upsertRemoteTeacherIntoLocalDb(mergedRow, password);
             if (synced) {
+              if (!existingRemote) {
+                // Best-effort persist into admin_teachers so follow-up /api/bootstrap succeeds across serverless instances
+                await upsertSingleTeacherOnSupabaseServer(sbClient, synced).catch(
+                  () => null
+                );
+              }
               const teacherStatus = normalizeTeacherStatus(synced.status);
               if (teacherStatus === 'locked') {
                 return res.status(403).json({
@@ -501,7 +550,7 @@ export function createApp(): express.Express {
                     'Tài khoản này đang bị tạm khóa. Vui lòng liên hệ Giáo viên Master.',
                 });
               }
-              const token = signSessionToken(synced.userId);
+              const token = signSessionToken(synced.userId, synced.email);
               const { password: _pw, ...safeTeacher } = synced;
               return res.json({
                 teacher: {
@@ -542,7 +591,7 @@ export function createApp(): express.Express {
             'Tài khoản này đang bị tạm khóa. Vui lòng liên hệ Giáo viên Master.',
         });
       }
-      const token = signSessionToken(found.userId);
+      const token = signSessionToken(found.userId, found.email);
       const { password: _pw, ...safeTeacher } = found;
       return res.json({
         teacher: {
@@ -2896,6 +2945,37 @@ export function createApp(): express.Express {
       saveLocalDb();
       return res.json(room);
     })
+  );
+
+  app.use(
+    (
+      err: unknown,
+      _req: express.Request,
+      res: express.Response,
+      _next: express.NextFunction
+    ) => {
+      if (res.headersSent) return;
+      if (err instanceof SupabaseStoreError) {
+        return res.status(err.status).json({ error: err.message });
+      }
+      const status =
+        typeof (err as { status?: unknown })?.status === 'number'
+          ? (err as { status: number }).status
+          : typeof (err as { statusCode?: unknown })?.statusCode === 'number'
+            ? (err as { statusCode: number }).statusCode
+            : 500;
+      const isSyntaxErr =
+        err instanceof SyntaxError ||
+        (err as { type?: unknown })?.type === 'entity.parse.failed';
+      const message = isSyntaxErr
+        ? 'Dữ liệu gửi lên không đúng định dạng JSON.'
+        : err instanceof Error && err.message
+          ? err.message
+          : 'Lỗi máy chủ không xác định.';
+      return res
+        .status(status >= 400 && status < 600 ? status : 500)
+        .json({ error: message });
+    }
   );
 
   return app;

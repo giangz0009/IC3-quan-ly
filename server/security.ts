@@ -1,8 +1,19 @@
 import crypto from 'node:crypto';
 
 const HASH_PREFIX = 'scrypt$';
+const FALLBACK_KEY = (
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  ''
+).trim();
 const SESSION_SECRET =
-  process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+  process.env.SESSION_SECRET?.trim() ||
+  (FALLBACK_KEY
+    ? crypto
+        .createHmac('sha256', 'ic3-master-admin-session-v1')
+        .update(FALLBACK_KEY)
+        .digest('hex')
+    : crypto.randomBytes(32).toString('hex'));
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 export const revokedTokens = new Set<string>();
 
@@ -23,15 +34,24 @@ export function verifyTeacherPassword(password: string, stored: string): boolean
   const parts = stored.split('$');
   if (parts.length !== 3) return false;
   const [, salt, hexHash] = parts;
-  const expected = Buffer.from(hexHash, 'hex');
-  const actual = crypto.scryptSync(password, salt, expected.length);
-  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  if (!salt || !hexHash || hexHash.length % 2 !== 0) return false;
+  try {
+    const expected = Buffer.from(hexHash, 'hex');
+    if (expected.length < 16) return false;
+    const actual = crypto.scryptSync(password, salt, expected.length);
+    return (
+      expected.length === actual.length && crypto.timingSafeEqual(expected, actual)
+    );
+  } catch {
+    return false;
+  }
 }
 
-export function signSessionToken(userId: string): string {
+export function signSessionToken(userId: string, email?: string): string {
   const payload = Buffer.from(
     JSON.stringify({
       userId,
+      ...(email ? { email: email.trim().toLowerCase() } : {}),
       jti: crypto.randomBytes(8).toString('hex'),
       exp: Date.now() + SESSION_TTL_MS,
     }),
@@ -44,7 +64,9 @@ export function signSessionToken(userId: string): string {
   return `${payload}.${sig}`;
 }
 
-export function verifySessionToken(token: string): string | null {
+export function verifySessionPayload(
+  token: string
+): { userId: string; email?: string } | null {
   if (!token || revokedTokens.has(token)) return null;
   const parts = token.split('.');
   if (parts.length !== 2) return null;
@@ -64,14 +86,21 @@ export function verifySessionToken(token: string): string | null {
   try {
     const decoded = JSON.parse(
       Buffer.from(payload, 'base64url').toString('utf8')
-    ) as { userId?: string; exp?: number };
+    ) as { userId?: string; email?: string; exp?: number };
     if (!decoded.userId || !decoded.exp || Date.now() > decoded.exp) {
       return null;
     }
-    return decoded.userId;
+    return {
+      userId: decoded.userId,
+      email: typeof decoded.email === 'string' ? decoded.email : undefined,
+    };
   } catch {
     return null;
   }
+}
+
+export function verifySessionToken(token: string): string | null {
+  return verifySessionPayload(token)?.userId ?? null;
 }
 
 export function makeId(prefix: string): string {

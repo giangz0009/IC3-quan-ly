@@ -18,7 +18,7 @@ import type {
   SchoolClass,
   StudentBreakState,
   StudentProfile,
-} from '../src/types/ic3';
+} from '../src/types/ic3.js';
 import {
   buildAdminTeachersSupabasePayload,
   buildQuestionBankSupabasePayload,
@@ -32,7 +32,7 @@ import {
   normalizeTeacherStatus,
   normalizeVietnamesePassword,
   rankBattleParticipants,
-} from '../src/utils/ic3Rules';
+} from '../src/utils/ic3Rules.js';
 import {
   buildFullDatabaseSupabasePayload,
   ensureSupabaseUuid,
@@ -57,8 +57,8 @@ import {
   mapSubmissionToRow,
   mapSubmissionsFromRows,
   mapTeacherRowToDomain,
-} from '../src/utils/supabaseMappers';
-import { hashTeacherPassword, makeId, makeUuid } from './security';
+} from '../src/utils/supabaseMappers.js';
+import { hashTeacherPassword, makeId, makeUuid } from './security.js';
 
 export const HOTSPOT_STORAGE_BUCKET = 'hotspot-images';
 
@@ -110,27 +110,136 @@ function assertNoError(
 // Auth & Teachers
 // =========================================================================
 
+function isMissingColumnError(
+  error: { message?: string; code?: string } | null | undefined
+): boolean {
+  if (!error) return false;
+  const msg = String(error.message ?? '').toLowerCase();
+  return (
+    error.code === '42703' ||
+    error.code === 'PGRST204' ||
+    (msg.includes('column') && msg.includes('does not exist')) ||
+    msg.includes('could not find the')
+  );
+}
+
+const TEACHER_SELECT_COLUMNS =
+  'user_id, full_name, email, password_hash, role, status, created_at';
+
+export async function findAdminTeacherInSupabaseByEmail(
+  client: SupabaseClient,
+  email: string
+): Promise<{
+  row: Record<string, unknown> | null;
+  tableHasRows: boolean;
+}> {
+  const cleanEmail = email.trim().toLowerCase();
+  const escapedPattern = cleanEmail.replace(/[\\%_]/g, '\\$&');
+
+  let { data: rows, error: rowErr } = await client
+    .from('admin_teachers')
+    .select(TEACHER_SELECT_COLUMNS)
+    .ilike('email', escapedPattern)
+    .limit(1);
+
+  if (isMissingColumnError(rowErr)) {
+    const retry = await client
+      .from('admin_teachers')
+      .select('*')
+      .ilike('email', escapedPattern)
+      .limit(1);
+    rows = retry.data;
+    rowErr = retry.error;
+  }
+
+  let { count, error: countErr } = await client
+    .from('admin_teachers')
+    .select('user_id', { count: 'exact', head: true });
+
+  if (isMissingColumnError(countErr)) {
+    const retryCount = await client
+      .from('admin_teachers')
+      .select('*', { count: 'exact', head: true });
+    count = retryCount.count;
+    countErr = retryCount.error;
+  }
+
+  assertNoError(rowErr, 'Lỗi truy vấn tài khoản giáo viên trên Supabase');
+  assertNoError(countErr, 'Lỗi kiểm tra bảng admin_teachers trên Supabase');
+
+  const row =
+    Array.isArray(rows) && rows.length > 0
+      ? (rows[0] as Record<string, unknown>)
+      : null;
+
+  return {
+    row,
+    tableHasRows: (count ?? 0) > 0,
+  };
+}
+
 export async function getTeacherFromSupabaseById(
   client: SupabaseClient,
-  userId: string
+  userId: string,
+  emailHint?: string
 ): Promise<{ teacher: AdminTeacher | null; tableHasRows: boolean }> {
-  const [{ data: row, error: rowErr }, { count, error: countErr }] =
-    await Promise.all([
-      client
+  let { data: rows, error: rowErr } = await client
+    .from('admin_teachers')
+    .select(TEACHER_SELECT_COLUMNS)
+    .eq('user_id', userId)
+    .limit(1);
+
+  if (isMissingColumnError(rowErr)) {
+    const retry = await client
+      .from('admin_teachers')
+      .select('*')
+      .eq('user_id', userId)
+      .limit(1);
+    rows = retry.data;
+    rowErr = retry.error;
+  }
+
+  let matchedRow =
+    Array.isArray(rows) && rows.length > 0
+      ? (rows[0] as Record<string, unknown>)
+      : null;
+
+  if (!matchedRow && emailHint?.trim()) {
+    const escaped = emailHint.trim().toLowerCase().replace(/[\\%_]/g, '\\$&');
+    let byEmail = await client
+      .from('admin_teachers')
+      .select(TEACHER_SELECT_COLUMNS)
+      .ilike('email', escaped)
+      .limit(1);
+    if (isMissingColumnError(byEmail.error)) {
+      byEmail = await client
         .from('admin_teachers')
-        .select('user_id, full_name, email, password_hash, role, status, created_at')
-        .eq('user_id', userId)
-        .maybeSingle(),
-      client
-        .from('admin_teachers')
-        .select('user_id', { count: 'exact', head: true }),
-    ]);
+        .select('*')
+        .ilike('email', escaped)
+        .limit(1);
+    }
+    if (!byEmail.error && Array.isArray(byEmail.data) && byEmail.data.length > 0) {
+      matchedRow = byEmail.data[0] as Record<string, unknown>;
+    }
+  }
+
+  let { count, error: countErr } = await client
+    .from('admin_teachers')
+    .select('user_id', { count: 'exact', head: true });
+
+  if (isMissingColumnError(countErr)) {
+    const retryCount = await client
+      .from('admin_teachers')
+      .select('*', { count: 'exact', head: true });
+    count = retryCount.count;
+    countErr = retryCount.error;
+  }
 
   assertNoError(rowErr, 'Lỗi truy vấn tài khoản giáo viên trên Supabase');
   assertNoError(countErr, 'Lỗi kiểm tra bảng admin_teachers trên Supabase');
 
   return {
-    teacher: row ? mapTeacherRowToDomain(row as Record<string, unknown>) : null,
+    teacher: matchedRow ? mapTeacherRowToDomain(matchedRow) : null,
     tableHasRows: (count ?? 0) > 0,
   };
 }
@@ -138,10 +247,17 @@ export async function getTeacherFromSupabaseById(
 export async function listTeachersFromSupabase(
   client: SupabaseClient
 ): Promise<AdminTeacher[]> {
-  const { data, error } = await client
+  let { data, error } = await client
     .from('admin_teachers')
-    .select('user_id, full_name, email, password_hash, role, status, created_at')
+    .select(TEACHER_SELECT_COLUMNS)
     .order('created_at', { ascending: true });
+  if (isMissingColumnError(error)) {
+    const retry = await client
+      .from('admin_teachers')
+      .select('*');
+    data = retry.data;
+    error = retry.error;
+  }
   assertNoError(error, 'Không thể đọc danh sách giáo viên từ Supabase');
   return (data ?? []).map((row) =>
     mapTeacherRowToDomain(row as Record<string, unknown>)

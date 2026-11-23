@@ -1,4 +1,4 @@
-import type { AdminDatabase } from '../types/ic3';
+import type { AdminDatabase } from '../types/ic3.js';
 
 export const SUPABASE_SCHEMA_SQL = `-- =========================================================
 -- 1. TỔ CHỨC TRƯỜNG HỌC - LỚP HỌC - HỌC SINH

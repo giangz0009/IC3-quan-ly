@@ -25,14 +25,14 @@ import {
   type SchoolClass,
   type StudentBreakState,
   type StudentProfile,
-} from '../types/ic3';
+} from '../types/ic3.js';
 import {
   buildAdminTeachersSupabasePayload,
   buildQuestionBankSupabasePayload,
   getDefaultInstructionForQuestionType,
   normalizeAdminRole,
   normalizeTeacherStatus,
-} from './ic3Rules';
+} from './ic3Rules.js';
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -141,10 +141,11 @@ export function mapStudentToRow(st: StudentProfile) {
 }
 
 export function mapTeacherRowToDomain(row: Record<string, unknown>): AdminTeacher {
+  const email = String(row.email ?? '').trim().toLowerCase();
   return {
-    userId: String(row.user_id ?? ''),
-    fullName: String(row.full_name ?? ''),
-    email: String(row.email ?? '').trim().toLowerCase(),
+    userId: String(row.user_id ?? row.id ?? email).trim(),
+    fullName: String(row.full_name ?? email).trim() || email,
+    email,
     password: typeof row.password_hash === 'string' ? row.password_hash : '',
     role: normalizeAdminRole(typeof row.role === 'string' ? row.role : undefined),
     status: normalizeTeacherStatus(
@@ -158,7 +159,7 @@ function getDefaultLevelForModule(mod: IC3Module): IC3Level {
   if (mod === 'computing_fundamentals') return 'LV1';
   if (mod === 'key_applications') return 'LV2';
   if (mod === 'living_online') return 'LV3';
-  return mod.toUpperCase();
+  return String(mod || 'LV1').toUpperCase();
 }
 
 export function mapQuestionBankRowsToDomain(input: {
@@ -177,9 +178,9 @@ export function mapQuestionBankRowsToDomain(input: {
   const partCounters = new Map<string, number>();
 
   const questions: Question[] = input.questionRows.map((row) => {
-    const mod = (row.module as IC3Module) || 'computing_fundamentals';
-    const cat = ((row.category as KnowledgeCategory) || 'GM').trim().toUpperCase();
-    const level = (row.level as IC3Level) || getDefaultLevelForModule(mod);
+    const mod = String(row.module || 'computing_fundamentals') as IC3Module;
+    const cat = String(row.category || 'GM').trim().toUpperCase() as KnowledgeCategory;
+    const level = String(row.level || getDefaultLevelForModule(mod)) as IC3Level;
     const contentCode = String(row.content_code || `${cat}1`).trim().toUpperCase();
     const counterKey = `${mod}:${cat}:${contentCode}`;
     const fallbackOrder = (partCounters.get(counterKey) ?? 0) + 1;
@@ -189,13 +190,16 @@ export function mapQuestionBankRowsToDomain(input: {
         : fallbackOrder;
     partCounters.set(counterKey, Math.max(fallbackOrder, topicOrder));
 
-    let parsedPayload = row.payload as QuestionPayload;
+    let parsedPayload: QuestionPayload = { options: [], correctOptionId: '' };
     if (typeof row.payload === 'string') {
       try {
-        parsedPayload = JSON.parse(row.payload) as QuestionPayload;
+        const parsed = JSON.parse(row.payload) as QuestionPayload;
+        if (parsed && typeof parsed === 'object') parsedPayload = parsed;
       } catch {
         parsedPayload = { options: [], correctOptionId: '' };
       }
+    } else if (row.payload && typeof row.payload === 'object') {
+      parsedPayload = row.payload as QuestionPayload;
     }
 
     const now = new Date().toISOString();

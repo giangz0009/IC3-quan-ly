@@ -21,7 +21,7 @@ import {
   type SchoolClass,
   type StudentProfile,
   type TeacherAccountStatus,
-} from '../types/ic3';
+} from '../types/ic3.js';
 
 /**
  * Lấy câu hướng dẫn ngắn mặc định tương ứng với từng dạng câu hỏi IC3.

@@ -1,5 +1,3 @@
-import { createApp } from '../server/app';
+import handler from './_handler.js';
 
-const app = createApp();
-
-export default app;
+export default handler;

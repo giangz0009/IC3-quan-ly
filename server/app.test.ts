@@ -485,3 +485,132 @@ test('Class tasks + student submission unlocks break state & battle room lifecyc
   assert.equal(resetRoom.status, 200);
   assert.equal(resetRoom.data.status, 'lobby');
 });
+
+test('security.verifyTeacherPassword safely rejects malformed scrypt hashes without throwing', async () => {
+  const { verifyTeacherPassword, hashTeacherPassword } = await import(
+    './security.js'
+  );
+  assert.equal(verifyTeacherPassword('any', ''), false);
+  assert.equal(verifyTeacherPassword('any', 'scrypt$salt$'), false);
+  assert.equal(verifyTeacherPassword('any', 'scrypt$salt$abc'), false);
+  assert.equal(verifyTeacherPassword('any', 'scrypt$salt$zzzz'), false);
+  const valid = hashTeacherPassword('matkhau123');
+  assert.equal(verifyTeacherPassword('matkhau123', valid), true);
+  assert.equal(verifyTeacherPassword('sai', valid), false);
+});
+
+test('Express JSON error middleware returns JSON instead of HTML 500 on malformed payloads', async () => {
+  const res = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{"email": broken-json',
+  });
+  assert.equal(res.status, 400);
+  const contentType = res.headers.get('content-type') || '';
+  assert(contentType.includes('application/json'));
+  const data = (await res.json()) as { error?: string };
+  assert(data.error);
+});
+
+test('Supabase teacher created directly in admin_teachers (including schema fallback & custom user_id) logs in and bootstraps cleanly', async () => {
+  const origFetch = globalThis.fetch;
+  const customTeacherRow = {
+    user_id: 'sb_custom_teacher_uid_01',
+    full_name: 'Cô Giáo Supabase',
+    email: 'admin@ic3master.edu.vn', // intentionally shares email with seed master to verify Supabase user_id wins
+    password_hash: 'supabase_secret_pw',
+    role: 'teacher_lv2',
+    created_at: '2026-01-01T00:00:00.000Z',
+  };
+
+  globalThis.fetch = (async (
+    input: RequestInfo | URL,
+    init?: RequestInit
+  ): Promise<Response> => {
+    const urlStr =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    if (urlStr.startsWith('https://mock-ic3-project.supabase.co/')) {
+      const parsed = new URL(urlStr);
+      // Simulate schema lacking `status` column on explicit select, succeeding on `select=*`
+      const selectParam = parsed.searchParams.get('select') || '';
+      if (
+        parsed.pathname === '/rest/v1/admin_teachers' &&
+        selectParam.includes('status')
+      ) {
+        return new Response(
+          JSON.stringify({
+            code: '42703',
+            message: 'column admin_teachers.status does not exist',
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (parsed.pathname === '/rest/v1/admin_teachers') {
+        const isHead = (init?.method || 'GET').toUpperCase() === 'HEAD';
+        return new Response(isHead ? null : JSON.stringify([customTeacherRow]), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Range': '0-0/1',
+          },
+        });
+      }
+
+      if (parsed.pathname.startsWith('/rest/v1/')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Range': '*/0',
+          },
+        });
+      }
+
+      return new Response(JSON.stringify({ error: 'Invalid credentials' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    return origFetch(input, init);
+  }) as typeof fetch;
+
+  try {
+    const sbHeaders = {
+      'X-Supabase-Url': 'https://mock-ic3-project.supabase.co',
+      'X-Supabase-Anon-Key': 'mock-anon-key',
+    };
+
+    const loginRes = await apiFetch<{
+      token: string;
+      teacher: SafeTeacher;
+      authSource: string;
+    }>('/api/auth/login', {
+      method: 'POST',
+      headers: sbHeaders,
+      body: {
+        email: 'ADMIN@IC3MASTER.EDU.VN',
+        password: 'supabase_secret_pw',
+      },
+    });
+    assert.equal(loginRes.status, 200);
+    assert.equal(loginRes.data.authSource, 'supabase');
+    assert.equal(loginRes.data.teacher.userId, 'sb_custom_teacher_uid_01');
+    assert.equal(loginRes.data.teacher.role, 'teacher_lv2');
+
+    const bootRes = await apiFetch<AdminDatabase>('/api/bootstrap', {
+      token: loginRes.data.token,
+      headers: sbHeaders,
+    });
+    assert.equal(bootRes.status, 200);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
