@@ -361,9 +361,15 @@ export function createApp(): express.Express {
         const pathParam = parsed.searchParams.get('__path');
         if (pathParam !== null) {
           parsed.searchParams.delete('__path');
-          const cleanSub = pathParam.replace(/^\/+/, '');
           const qs = parsed.searchParams.toString();
-          req.url = `/api/${cleanSub}${qs ? `?${qs}` : ''}`;
+          const targetPathname =
+            parsed.pathname === '/api/index' || parsed.pathname === '/api'
+              ? (() => {
+                  const cleanSub = pathParam.replace(/^\/+/, '');
+                  return cleanSub ? `/api/${cleanSub}` : '/api';
+                })()
+              : parsed.pathname;
+          req.url = `${targetPathname}${qs ? `?${qs}` : ''}`;
         } else if (
           !req.url.startsWith('/api') &&
           (req.url.startsWith('/health') || req.url.startsWith('/auth/'))
@@ -2946,6 +2952,12 @@ export function createApp(): express.Express {
       return res.json(room);
     })
   );
+
+  app.all('/api/*', (req, res) => {
+    return res.status(404).json({
+      error: `Không tìm thấy API endpoint: ${req.method} ${req.path}`,
+    });
+  });
 
   app.use(
     (

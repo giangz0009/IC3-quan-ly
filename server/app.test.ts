@@ -614,3 +614,19 @@ test('Supabase teacher created directly in admin_teachers (including schema fall
   }
 });
 
+test('api/index normalizeApiUrl restores original /api/* routes across Vercel rewrite modes', async () => {
+  const { normalizeApiUrl } = await import('../api/index.js');
+  assert.equal(normalizeApiUrl('/api/index?__path=auth/login'), '/api/auth/login');
+  assert.equal(
+    normalizeApiUrl('/api/auth/login?__path=auth/login'),
+    '/api/auth/login'
+  );
+  assert.equal(
+    normalizeApiUrl('/api/index?__path=questions&module=computing_fundamentals'),
+    '/api/questions?module=computing_fundamentals'
+  );
+  assert.equal(normalizeApiUrl('/api/index?__path='), '/api');
+  assert.equal(normalizeApiUrl('/api/health'), '/api/health');
+});
+
+
