@@ -1,7 +1,7 @@
 # Tính năng 06: Điều phối Thi đấu Realtime (Battle Arena)
 
-**Trạng thái:** Đã hoàn thành lõi điều phối + mô phỏng trên server  
-**Cập nhật lần cuối:** 2026-11-20
+**Trạng thái:** Đã hoàn thành (lưu trực tiếp Supabase `class_battle_configs`, `battle_rooms`, `battle_participants`, `battle_events`)  
+**Cập nhật lần cuối:** 2026-11-24
 
 ---
 
@@ -11,9 +11,9 @@
 |---|---|---|
 | Frontend | `src/components/BattleControlView.tsx` | Chọn lớp, công tắc bật/tắt nút Thi đấu, thẻ tóm tắt & Modal Box chỉnh sửa cấu hình luật, bảng xếp hạng Live & Nhật ký Sự kiện Realtime |
 | Logic thuần | `src/utils/ic3Rules.ts` | `calculateIC3Score()`, `rankBattleParticipants()`, `formatDuration()` |
-| Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test xếp hạng ưu tiên Điểm giảm dần → Thời gian tăng dần & trao thưởng Top X |
+| Kiểm thử | `src/utils/ic3Rules.test.ts` & `src/utils/supabaseMappers.test.ts` | Unit test xếp hạng ưu tiên Điểm giảm dần → Thời gian tăng dần, trao thưởng Top X & mapper 4 bảng thi đấu |
 | API Client | `src/utils/api.ts` | `saveBattleConfig`, `createBattleRoom`, `joinBattleRoom`, `startBattleRoom`, `simulateBattleStep`, `finishBattleRoom`, `resetBattleRoom` |
-| Backend | `server.ts` | Các route `/api/battle-configs/:classId` và `/api/battle-rooms*` |
+| Backend | `server/app.ts` & `server/supabaseStore.ts` | Các route `/api/battle-configs/:classId` và `/api/battle-rooms*` ghi trực tiếp xuống 4 bảng thi đấu + `student_break_states` trên Supabase |
 
 ---
 
@@ -60,14 +60,14 @@ Tab **Thi đấu Realtime** là phòng điều khiển cho phép giáo viên thu
 
 ## 4. Hạn chế hiện tại & Hướng phát triển
 
-- Trạng thái phòng đấu (`battle_rooms`), thí sinh (`battle_participants`) và nhật ký sự kiện (`battle_events`) hiện đang chạy và mô phỏng trên **Express Local DB (`server.ts`)**; chưa nối luồng Supabase Realtime (`postgres_changes` / channel subscription) để đồng bộ trực tiếp từ trình duyệt học sinh thật.
-- Cấu hình giải đấu (`class_battle_configs`) được đẩy lên Supabase thông qua nút đồng bộ tổng ở tab Kết nối Supabase, chưa đẩy tự động tức thì khi bấm *"Lưu Cấu hình"* hoặc bật/tắt công tắc.
-- Trong `server.ts`, phần tự động kết thúc khi mọi người hoàn thành ở `simulate-step` cập nhật `rankedResults` nhưng đoạn cộng `breakStates` hiện nằm ở endpoint `POST /api/battle-rooms/:roomId/finish` (cần cân nhắc gộp logic cộng thưởng vào hàm dùng chung nếu chạy auto-finish thật).
+- Trạng thái `class_battle_configs`, `battle_rooms`, `battle_participants` và `battle_events` đã được đọc/ghi **trực tiếp** vào Supabase PostgreSQL qua `server/supabaseStore.ts`; tuy nhiên giao diện Admin hiện cập nhật sau mỗi thao tác/API call chứ chưa mở kênh `supabase.channel(...).on('postgres_changes', ...)` để tự động đẩy UI khi ứng dụng học sinh bên ngoài thay đổi dữ liệu.
+- Phần tự động kết thúc khi mọi người hoàn thành ở `simulate-step` cập nhật `rankedResults`, trong khi luồng cộng `breakStates` tập trung tại `POST /api/battle-rooms/:roomId/finish` (cần hợp nhất helper cộng thưởng nếu nối với học sinh thi đấu thật theo thời gian thực).
 
 ---
 
 ## 5. Nhật ký thay đổi
 
+- **2026-11-24 / 2026-11-23:** Chuyển toàn bộ cấu hình giải đấu và điều phối phòng đấu sang lưu trực tiếp trên 4 bảng Supabase qua `server/app.ts` + `server/supabaseStore.ts`.
 - **2026-11-21 (Modal Box Cấu hình Thi đấu):** Chuyển form *Cấu hình Luật & Bộ đề Thi đấu* sang Modal Box qua nút **Chỉnh sửa Cấu hình**, hiển thị thẻ tóm tắt thông số trận đấu trên giao diện chính.
 - **2026-11-21:** Mở phạm vi tổ chức Thi đấu cho mọi lớp trên tất cả các trường; giới hạn quyền tổ chức cho **GV Chuyên môn (LV2)** và **Giáo viên Master** (chặn LV1 cả UI lẫn API).
 - **2026-11-20:** Rà soát và tài liệu hóa toàn bộ vòng đời phòng thi đấu, luật Combo/Khiên/Debuff và giới hạn đồng bộ Realtime hiện tại.

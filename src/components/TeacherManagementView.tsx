@@ -39,10 +39,12 @@ import {
   isSupabaseConfigured,
   runTrackedSupabaseActivity,
 } from '../utils/supabaseClient';
+import { TableSkeletonRows } from './TableSkeleton';
 
 interface TeacherManagementViewProps {
   db: Omit<AdminDatabase, 'teachers'> & { teachers: SafeTeacher[] };
   currentTeacher: SafeTeacher;
+  loading?: boolean;
   onRefresh: () => Promise<void>;
   onNotify: (msg: string, isError?: boolean) => void;
   onOpenSupabase?: () => void;
@@ -51,6 +53,7 @@ interface TeacherManagementViewProps {
 export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
   db,
   currentTeacher,
+  loading = false,
   onRefresh,
   onNotify,
   onOpenSupabase,
@@ -554,178 +557,208 @@ export const TeacherManagementView: React.FC<TeacherManagementViewProps> = ({
                 <th className="py-2.5 text-right font-medium">Thao tác</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {filteredTeachers.map((t) => {
-                const rolePerm = getTeacherPermissions(t.role);
-                const status = normalizeTeacherStatus(t.status);
-                const isSelf = t.userId === currentTeacher.userId;
-                const canChangeRoleOrLock =
-                  !isSelf &&
-                  canDeleteOrDemoteMaster(
-                    db.teachers,
-                    t.userId,
-                    'teacher_lv1',
-                    status
-                  ).ok &&
-                  canDeleteOrDemoteMaster(
-                    db.teachers,
-                    t.userId,
-                    rolePerm.role,
-                    'locked'
-                  ).ok;
-                const canRemove =
-                  !isSelf && canDeleteOrDemoteMaster(db.teachers, t.userId).ok;
+            {loading ? (
+              <TableSkeletonRows
+                rows={6}
+                rowHeightClass=""
+                ariaLabel="Đang tải danh sách giáo viên..."
+                columns={[
+                  {
+                    variant: 'twoLine',
+                    widths: ['w-36', 'w-44', 'w-32', 'w-40'],
+                    cellClassName: 'py-3 pr-4',
+                  },
+                  {
+                    variant: 'text',
+                    widths: ['w-36', 'w-28', 'w-32'],
+                    cellClassName: 'py-3 pr-4',
+                  },
+                  {
+                    variant: 'iconBox',
+                    align: 'center',
+                    cellClassName: 'py-3 px-4 text-center',
+                  },
+                  {
+                    variant: 'actions',
+                    align: 'right',
+                    cellClassName: 'py-3 text-right',
+                  },
+                ]}
+              />
+            ) : (
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {filteredTeachers.map((t) => {
+                  const rolePerm = getTeacherPermissions(t.role);
+                  const status = normalizeTeacherStatus(t.status);
+                  const isSelf = t.userId === currentTeacher.userId;
+                  const canChangeRoleOrLock =
+                    !isSelf &&
+                    canDeleteOrDemoteMaster(
+                      db.teachers,
+                      t.userId,
+                      'teacher_lv1',
+                      status
+                    ).ok &&
+                    canDeleteOrDemoteMaster(
+                      db.teachers,
+                      t.userId,
+                      rolePerm.role,
+                      'locked'
+                    ).ok;
+                  const canRemove =
+                    !isSelf && canDeleteOrDemoteMaster(db.teachers, t.userId).ok;
 
-                return (
-                  <tr
-                    key={t.userId}
-                    className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
-                  >
-                    <td className="py-3 pr-4">
-                      <div className="font-medium text-slate-900 dark:text-slate-100">
-                        {t.fullName}
-                        {isSelf && (
-                          <span className="ml-2 text-[11px] font-normal text-blue-600 dark:text-blue-400">
-                            (Đang đăng nhập)
-                          </span>
-                        )}
-                      </div>
-                      <div className="font-mono text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                        {t.email}
-                      </div>
-                    </td>
+                  return (
+                    <tr
+                      key={t.userId}
+                      className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
+                    >
+                      <td className="py-3 pr-4">
+                        <div className="font-medium text-slate-900 dark:text-slate-100">
+                          {t.fullName}
+                          {isSelf && (
+                            <span className="ml-2 text-[11px] font-normal text-blue-600 dark:text-blue-400">
+                              (Đang đăng nhập)
+                            </span>
+                          )}
+                        </div>
+                        <div className="font-mono text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                          {t.email}
+                        </div>
+                      </td>
 
-                    <td className="py-3 pr-4 whitespace-nowrap">
-                      <span
-                        title="Chỉ thay đổi vai trò khi chọn vào nút Sửa"
-                        className={`text-xs font-semibold ${
-                          rolePerm.role === 'master'
-                            ? 'text-blue-700 dark:text-blue-400'
-                            : rolePerm.role === 'teacher_lv2'
-                              ? 'text-emerald-700 dark:text-emerald-400'
-                              : 'text-amber-700 dark:text-amber-400'
-                        }`}
-                      >
-                        {rolePerm.label}
-                      </span>
-                    </td>
-
-                    <td className="py-3 px-4 text-center whitespace-nowrap">
-                      {status === 'active' ? (
+                      <td className="py-3 pr-4 whitespace-nowrap">
                         <span
-                          role="img"
-                          aria-label={`Trạng thái tài khoản ${t.fullName}: Đang hoạt động`}
-                          title="Đang hoạt động"
-                          className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400"
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
-                        </span>
-                      ) : (
-                        <span
-                          role="img"
-                          aria-label={`Trạng thái tài khoản ${t.fullName}: Tạm khóa`}
-                          title="Tạm khóa"
-                          className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-red-50 dark:bg-red-950/60 text-red-600 dark:text-red-400"
-                        >
-                          <Lock className="w-4 h-4" />
-                        </span>
-                      )}
-                    </td>
-
-                    <td className="py-3 text-right whitespace-nowrap space-x-3">
-                      <button
-                        type="button"
-                        aria-label={`Sửa giáo viên ${t.fullName}`}
-                        onClick={() => openEditModal(t)}
-                        className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
-                      >
-                        <Pencil className="w-3 h-3" />
-                        <span>Sửa</span>
-                      </button>
-
-                      {canChangeRoleOrLock && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          aria-label={
-                            status === 'active'
-                              ? `Tạm khóa tài khoản ${t.fullName}`
-                              : `Mở khóa tài khoản ${t.fullName}`
-                          }
-                          onClick={() => handleToggleStatus(t)}
-                          className={`inline-flex items-center gap-1 text-xs font-medium hover:underline disabled:opacity-50 cursor-pointer ${
-                            status === 'active'
-                              ? 'text-amber-700 dark:text-amber-400'
-                              : 'text-emerald-700 dark:text-emerald-400'
+                          title="Chỉ thay đổi vai trò khi chọn vào nút Sửa"
+                          className={`text-xs font-semibold ${
+                            rolePerm.role === 'master'
+                              ? 'text-blue-700 dark:text-blue-400'
+                              : rolePerm.role === 'teacher_lv2'
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : 'text-amber-700 dark:text-amber-400'
                           }`}
                         >
-                          {status === 'active' ? (
-                            <>
-                              <Lock className="w-3 h-3" />
-                              <span>Khóa</span>
-                            </>
-                          ) : (
-                            <>
-                              <Unlock className="w-3 h-3" />
-                              <span>Mở khóa</span>
-                            </>
-                          )}
-                        </button>
-                      )}
+                          {rolePerm.label}
+                        </span>
+                      </td>
 
-                      {canRemove ? (
+                      <td className="py-3 px-4 text-center whitespace-nowrap">
+                        {status === 'active' ? (
+                          <span
+                            role="img"
+                            aria-label={`Trạng thái tài khoản ${t.fullName}: Đang hoạt động`}
+                            title="Đang hoạt động"
+                            className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                          </span>
+                        ) : (
+                          <span
+                            role="img"
+                            aria-label={`Trạng thái tài khoản ${t.fullName}: Tạm khóa`}
+                            title="Tạm khóa"
+                            className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-red-50 dark:bg-red-950/60 text-red-600 dark:text-red-400"
+                          >
+                            <Lock className="w-4 h-4" />
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="py-3 text-right whitespace-nowrap space-x-3">
                         <button
                           type="button"
-                          disabled={busy}
-                          aria-label={`Xóa giáo viên ${t.fullName}`}
-                          onClick={() => setDeletingTeacher(t)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400 hover:underline disabled:opacity-50 cursor-pointer"
+                          aria-label={`Sửa giáo viên ${t.fullName}`}
+                          onClick={() => openEditModal(t)}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
                         >
-                          <Trash2 className="w-3 h-3" />
-                          <span>Xóa</span>
+                          <Pencil className="w-3 h-3" />
+                          <span>Sửa</span>
                         </button>
-                      ) : (
-                        <span
-                          title={
-                            isSelf
-                              ? 'Không thể tự khóa hoặc xóa tài khoản đang đăng nhập'
-                              : 'Phải giữ lại ít nhất 1 tài khoản Master đang hoạt động'
-                          }
-                          className="inline-flex items-center gap-1 text-[11px] text-slate-400 dark:text-slate-500"
+
+                        {canChangeRoleOrLock && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            aria-label={
+                              status === 'active'
+                                ? `Tạm khóa tài khoản ${t.fullName}`
+                                : `Mở khóa tài khoản ${t.fullName}`
+                            }
+                            onClick={() => handleToggleStatus(t)}
+                            className={`inline-flex items-center gap-1 text-xs font-medium hover:underline disabled:opacity-50 cursor-pointer ${
+                              status === 'active'
+                                ? 'text-amber-700 dark:text-amber-400'
+                                : 'text-emerald-700 dark:text-emerald-400'
+                            }`}
+                          >
+                            {status === 'active' ? (
+                              <>
+                                <Lock className="w-3 h-3" />
+                                <span>Khóa</span>
+                              </>
+                            ) : (
+                              <>
+                                <Unlock className="w-3 h-3" />
+                                <span>Mở khóa</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+
+                        {canRemove ? (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            aria-label={`Xóa giáo viên ${t.fullName}`}
+                            onClick={() => setDeletingTeacher(t)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400 hover:underline disabled:opacity-50 cursor-pointer"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Xóa</span>
+                          </button>
+                        ) : (
+                          <span
+                            title={
+                              isSelf
+                                ? 'Không thể tự khóa hoặc xóa tài khoản đang đăng nhập'
+                                : 'Phải giữ lại ít nhất 1 tài khoản Master đang hoạt động'
+                            }
+                            className="inline-flex items-center gap-1 text-[11px] text-slate-400 dark:text-slate-500"
+                          >
+                            <ShieldCheck className="w-3 h-3" />
+                            <span>Được bảo vệ</span>
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {filteredTeachers.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={4}
+                      className="py-10 text-center text-sm text-slate-500 dark:text-slate-400 space-y-2"
+                    >
+                      <div>Không tìm thấy tài khoản giáo viên nào khớp bộ lọc.</div>
+                      {(searchQuery || roleFilter !== 'all' || statusFilter !== 'all') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSearchQuery('');
+                            setRoleFilter('all');
+                            setStatusFilter('all');
+                          }}
+                          className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
                         >
-                          <ShieldCheck className="w-3 h-3" />
-                          <span>Được bảo vệ</span>
-                        </span>
+                          Đặt lại bộ lọc
+                        </button>
                       )}
                     </td>
                   </tr>
-                );
-              })}
-
-              {filteredTeachers.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={4}
-                    className="py-10 text-center text-sm text-slate-500 dark:text-slate-400 space-y-2"
-                  >
-                    <div>Không tìm thấy tài khoản giáo viên nào khớp bộ lọc.</div>
-                    {(searchQuery || roleFilter !== 'all' || statusFilter !== 'all') && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSearchQuery('');
-                          setRoleFilter('all');
-                          setStatusFilter('all');
-                        }}
-                        className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
-                      >
-                        Đặt lại bộ lọc
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              )}
-            </tbody>
+                )}
+              </tbody>
+            )}
           </table>
         </div>
       </section>

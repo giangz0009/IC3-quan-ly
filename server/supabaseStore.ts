@@ -24,6 +24,7 @@ import {
   buildQuestionBankSupabasePayload,
   calculateIC3Score,
   collectHotspotStoragePathsToDelete,
+  generateNextStudentCode,
   getDefaultInstructionForQuestionType,
   getNextTopicOrder,
   getObsoleteHotspotStoragePath,
@@ -686,6 +687,75 @@ export async function createClassOnSupabase(
   return cls;
 }
 
+export async function batchCreateClassesOnSupabase(
+  client: SupabaseClient,
+  schoolId: string,
+  rows: Array<{ name?: unknown; grade?: unknown }>
+): Promise<{ created: SchoolClass[]; skipped: string[] }> {
+  const { data: schoolRow, error: sErr } = await client
+    .from('schools')
+    .select('id')
+    .eq('id', schoolId)
+    .maybeSingle();
+  assertNoError(sErr, 'Lỗi kiểm tra trường học trên Supabase');
+  if (!schoolRow) {
+    throw new SupabaseStoreError(404, 'Trường học không tồn tại.');
+  }
+
+  const { data: existingRows, error: clsErr } = await client
+    .from('classes')
+    .select('name')
+    .eq('school_id', schoolId);
+  assertNoError(clsErr, 'Lỗi đọc danh sách lớp học trên Supabase');
+
+  const existingNames = new Set(
+    (existingRows ?? []).map((r) => String(r.name ?? '').trim().toLowerCase())
+  );
+
+  const created: SchoolClass[] = [];
+  const skipped: string[] = [];
+
+  for (const row of rows) {
+    const name = String(row.name ?? '').trim();
+    const rawGrade = String(row.grade ?? '').trim();
+    if (!name) continue;
+
+    const key = name.toLowerCase();
+    if (existingNames.has(key)) {
+      skipped.push(name);
+      continue;
+    }
+    existingNames.add(key);
+
+    const numMatch = rawGrade.match(/^(?:kh[oôố]i|k|grade|gr)?\s*(\d{1,2})$/i);
+    const nameNumMatch = name.match(/^(\d{1,2})/);
+    const grade = rawGrade
+      ? numMatch
+        ? `Khối ${Number(numMatch[1])}`
+        : rawGrade
+      : nameNumMatch
+        ? `Khối ${Number(nameNumMatch[1])}`
+        : 'Khối 6';
+
+    created.push({
+      id: makeId('class'),
+      schoolId,
+      name,
+      grade,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  if (created.length > 0) {
+    const { error: insErr } = await client
+      .from('classes')
+      .insert(created.map(mapClassToRow));
+    assertNoError(insErr, 'Lỗi nhập hàng loạt lớp học lên Supabase');
+  }
+
+  return { created, skipped };
+}
+
 export async function updateClassOnSupabase(
   client: SupabaseClient,
   id: string,
@@ -781,17 +851,22 @@ export async function createStudentOnSupabase(
 export async function batchCreateStudentsOnSupabase(
   client: SupabaseClient,
   classId: string,
-  rows: Array<{ fullName?: unknown; studentCode?: unknown }>
+  rows: Array<{
+    fullName?: unknown;
+    studentCode?: unknown;
+    alwaysBreakReady?: unknown;
+  }>
 ): Promise<{ created: StudentProfile[]; skipped: string[] }> {
   const { data: clsRow, error: clsErr } = await client
     .from('classes')
-    .select('id')
+    .select('id, name')
     .eq('id', classId)
     .maybeSingle();
   assertNoError(clsErr, 'Lỗi kiểm tra lớp học trên Supabase');
   if (!clsRow) {
     throw new SupabaseStoreError(404, 'Lớp học không tồn tại.');
   }
+  const className = String((clsRow as { name?: unknown }).name ?? 'HS').trim() || 'HS';
 
   const { data: existingRows, error: stErr } = await client
     .from('students')
@@ -799,23 +874,31 @@ export async function batchCreateStudentsOnSupabase(
     .eq('class_id', classId);
   assertNoError(stErr, 'Lỗi đọc danh sách học sinh lớp trên Supabase');
 
-  const existingCodes = new Set(
-    (existingRows ?? []).map((r) => String(r.student_code ?? '').toUpperCase())
-  );
+  const trackedCodes = (existingRows ?? [])
+    .map((r) => String(r.student_code ?? '').trim().toUpperCase())
+    .filter(Boolean);
+  const existingCodes = new Set(trackedCodes);
 
   const created: StudentProfile[] = [];
   const skipped: string[] = [];
 
   for (const row of rows) {
     const fullName = String(row.fullName ?? '').trim();
-    const studentCode = String(row.studentCode ?? '').trim().toUpperCase();
-    if (!fullName || !studentCode) continue;
+    if (!fullName) continue;
 
-    if (existingCodes.has(studentCode)) {
-      skipped.push(studentCode);
-      continue;
+    const explicitCode = String(row.studentCode ?? '').trim().toUpperCase();
+    let studentCode = explicitCode;
+    if (studentCode) {
+      if (existingCodes.has(studentCode)) {
+        skipped.push(studentCode);
+        continue;
+      }
+    } else {
+      studentCode = generateNextStudentCode(className, trackedCodes);
     }
+
     existingCodes.add(studentCode);
+    trackedCodes.push(studentCode);
     created.push({
       id: makeId('st'),
       classId,
@@ -1004,7 +1087,7 @@ async function ensureCategoryParentRaw(
     .from('knowledge_categories')
     .select('id', { count: 'exact', head: true })
     .eq('module', moduleCode);
-  const { error } = await client.from('knowledge_categories').upsert(
+  let { error } = await client.from('knowledge_categories').upsert(
     {
       id: makeId('cat'),
       module: moduleCode,
@@ -1012,9 +1095,24 @@ async function ensureCategoryParentRaw(
       title: `Nhóm ${cleanCat}`,
       description: '',
       order_index: (count ?? 0) + 1,
+      is_enabled: true,
     },
     { onConflict: 'module,code', ignoreDuplicates: true }
   );
+  if (isMissingColumnError(error)) {
+    const fallback = await client.from('knowledge_categories').upsert(
+      {
+        id: makeId('cat'),
+        module: moduleCode,
+        code: cleanCat,
+        title: `Nhóm ${cleanCat}`,
+        description: '',
+        order_index: (count ?? 0) + 1,
+      },
+      { onConflict: 'module,code', ignoreDuplicates: true }
+    );
+    error = fallback.error;
+  }
   assertNoError(error, 'Lỗi tự tạo Nhóm kiến thức cha trên Supabase');
 }
 
@@ -1045,7 +1143,7 @@ async function ensureQuestionParentsOnSupabase(
     .eq('module', moduleCode)
     .eq('category', cleanCat);
 
-  const { error } = await client.from('knowledge_parts').upsert(
+  let { error } = await client.from('knowledge_parts').upsert(
     {
       id: makeId('part'),
       module: moduleCode,
@@ -1055,9 +1153,26 @@ async function ensureQuestionParentsOnSupabase(
       title: topic.trim() || `Chuyên đề ${cleanPart}`,
       description: '',
       order_index: (count ?? 0) + 1,
+      is_enabled: true,
     },
     { onConflict: 'module,category,code', ignoreDuplicates: true }
   );
+  if (isMissingColumnError(error)) {
+    const fallback = await client.from('knowledge_parts').upsert(
+      {
+        id: makeId('part'),
+        module: moduleCode,
+        level: level.trim().toUpperCase() || moduleCode.toUpperCase(),
+        category: cleanCat,
+        code: cleanPart,
+        title: topic.trim() || `Chuyên đề ${cleanPart}`,
+        description: '',
+        order_index: (count ?? 0) + 1,
+      },
+      { onConflict: 'module,category,code', ignoreDuplicates: true }
+    );
+    error = fallback.error;
+  }
   assertNoError(error, 'Lỗi tự tạo Phần kiến thức cha trên Supabase');
 }
 
@@ -1269,6 +1384,7 @@ export async function createCategoryOnSupabase(
     );
   }
 
+  const isEnabled = typeof input.isEnabled === 'boolean' ? input.isEnabled : true;
   const created: KnowledgeCategoryRecord = {
     id: makeId('cat'),
     module: modCode,
@@ -1276,16 +1392,35 @@ export async function createCategoryOnSupabase(
     title,
     description: String(input.description ?? '').trim(),
     orderIndex: (siblings ?? []).length + 1,
+    isEnabled,
   };
 
-  const { error: insErr } = await client.from('knowledge_categories').insert({
+  let { error: insErr } = await client.from('knowledge_categories').insert({
     id: created.id,
     module: created.module,
     code: created.code,
     title: created.title,
     description: created.description,
     order_index: created.orderIndex,
+    is_enabled: created.isEnabled,
   });
+  if (isMissingColumnError(insErr)) {
+    if (!created.isEnabled) {
+      throw new SupabaseStoreError(
+        400,
+        'CSDL Supabase chưa có cột is_enabled trên bảng knowledge_categories. Vui lòng chạy lệnh SQL: alter table public.knowledge_categories add column if not exists is_enabled boolean not null default true;'
+      );
+    }
+    const fallback = await client.from('knowledge_categories').insert({
+      id: created.id,
+      module: created.module,
+      code: created.code,
+      title: created.title,
+      description: created.description,
+      order_index: created.orderIndex,
+    });
+    insErr = fallback.error;
+  }
   assertNoError(insErr, 'Lỗi thêm nhóm kiến thức lên Supabase');
   return created;
 }
@@ -1316,11 +1451,31 @@ export async function updateCategoryOnSupabase(
     input.description !== undefined
       ? String(input.description).trim()
       : String(existing.description ?? '');
+  const currentEnabled =
+    existing.is_enabled === undefined || existing.is_enabled === null
+      ? true
+      : Boolean(existing.is_enabled);
+  const nextEnabled =
+    typeof input.isEnabled === 'boolean' ? input.isEnabled : currentEnabled;
+
+  const updatePayload: Record<string, unknown> = {
+    title: nextTitle,
+    description: nextDesc,
+  };
+  if (typeof input.isEnabled === 'boolean') {
+    updatePayload.is_enabled = nextEnabled;
+  }
 
   const { error: updErr } = await client
     .from('knowledge_categories')
-    .update({ title: nextTitle, description: nextDesc })
+    .update(updatePayload)
     .eq('id', id);
+  if (isMissingColumnError(updErr) && typeof input.isEnabled === 'boolean') {
+    throw new SupabaseStoreError(
+      400,
+      'CSDL Supabase chưa có cột is_enabled trên bảng knowledge_categories. Vui lòng chạy lệnh SQL: alter table public.knowledge_categories add column if not exists is_enabled boolean not null default true;'
+    );
+  }
   assertNoError(updErr, 'Lỗi cập nhật nhóm kiến thức trên Supabase');
 
   return {
@@ -1330,6 +1485,7 @@ export async function updateCategoryOnSupabase(
     title: nextTitle,
     description: nextDesc,
     orderIndex: Number(existing.order_index ?? 1),
+    isEnabled: nextEnabled,
   };
 }
 
@@ -1401,6 +1557,7 @@ export async function createPartOnSupabase(
     throw new SupabaseStoreError(409, `Phần ${cleanCode} đã tồn tại trong nhóm này.`);
   }
 
+  const isEnabled = typeof input.isEnabled === 'boolean' ? input.isEnabled : true;
   const created: KnowledgePart = {
     id: makeId('part'),
     module: input.module,
@@ -1410,9 +1567,10 @@ export async function createPartOnSupabase(
     title: input.title.trim(),
     description: (input.description || '').trim(),
     orderIndex: (siblings ?? []).length + 1,
+    isEnabled,
   };
 
-  const { error: insErr } = await client.from('knowledge_parts').insert({
+  let { error: insErr } = await client.from('knowledge_parts').insert({
     id: created.id,
     module: created.module,
     level: created.level,
@@ -1421,7 +1579,27 @@ export async function createPartOnSupabase(
     title: created.title,
     description: created.description,
     order_index: created.orderIndex,
+    is_enabled: created.isEnabled,
   });
+  if (isMissingColumnError(insErr)) {
+    if (!created.isEnabled) {
+      throw new SupabaseStoreError(
+        400,
+        'CSDL Supabase chưa có cột is_enabled trên bảng knowledge_parts. Vui lòng chạy lệnh SQL: alter table public.knowledge_parts add column if not exists is_enabled boolean not null default true;'
+      );
+    }
+    const fallback = await client.from('knowledge_parts').insert({
+      id: created.id,
+      module: created.module,
+      level: created.level,
+      category: created.category,
+      code: created.code,
+      title: created.title,
+      description: created.description,
+      order_index: created.orderIndex,
+    });
+    insErr = fallback.error;
+  }
   assertNoError(insErr, 'Lỗi thêm phần kiến thức lên Supabase');
   return created;
 }
@@ -1452,11 +1630,31 @@ export async function updatePartOnSupabase(
     input.description !== undefined
       ? String(input.description).trim()
       : String(existing.description ?? '');
+  const currentEnabled =
+    existing.is_enabled === undefined || existing.is_enabled === null
+      ? true
+      : Boolean(existing.is_enabled);
+  const nextEnabled =
+    typeof input.isEnabled === 'boolean' ? input.isEnabled : currentEnabled;
+
+  const updatePayload: Record<string, unknown> = {
+    title: nextTitle,
+    description: nextDesc,
+  };
+  if (typeof input.isEnabled === 'boolean') {
+    updatePayload.is_enabled = nextEnabled;
+  }
 
   const { error: updErr } = await client
     .from('knowledge_parts')
-    .update({ title: nextTitle, description: nextDesc })
+    .update(updatePayload)
     .eq('id', id);
+  if (isMissingColumnError(updErr) && typeof input.isEnabled === 'boolean') {
+    throw new SupabaseStoreError(
+      400,
+      'CSDL Supabase chưa có cột is_enabled trên bảng knowledge_parts. Vui lòng chạy lệnh SQL: alter table public.knowledge_parts add column if not exists is_enabled boolean not null default true;'
+    );
+  }
   assertNoError(updErr, 'Lỗi cập nhật phần kiến thức trên Supabase');
 
   return {
@@ -1468,6 +1666,7 @@ export async function updatePartOnSupabase(
     title: nextTitle,
     description: nextDesc,
     orderIndex: Number(existing.order_index ?? 1),
+    isEnabled: nextEnabled,
   };
 }
 
@@ -1505,6 +1704,146 @@ export async function deletePartOnSupabase(
     .delete()
     .eq('id', id);
   assertNoError(delErr, 'Lỗi xóa phần kiến thức trên Supabase');
+}
+
+export async function batchUpdatePartsReadinessOnSupabase(
+  client: SupabaseClient,
+  input: {
+    module: string;
+    level?: string;
+    category: string;
+    isEnabled: boolean;
+    virtualParts?: Array<{ code: string; title?: string; description?: string }>;
+  }
+): Promise<{
+  ok: boolean;
+  updatedCount: number;
+  isEnabled: boolean;
+  parts: KnowledgePart[];
+}> {
+  const modCode = input.module.trim();
+  const cleanCat = input.category.trim().toUpperCase();
+  const cleanLevel = (input.level ?? modCode).trim().toUpperCase() || modCode.toUpperCase();
+  if (!modCode || !cleanCat || typeof input.isEnabled !== 'boolean') {
+    throw new SupabaseStoreError(
+      400,
+      'Thiếu thông tin Mô-đun, Nhóm kiến thức hoặc trạng thái bật/tắt.'
+    );
+  }
+
+  await ensureCategoryParentRaw(client, modCode, cleanLevel, cleanCat);
+
+  const [{ data: existingPartRows, error: partsErr }, { data: questionRows, error: qErr }] =
+    await Promise.all([
+      client
+        .from('knowledge_parts')
+        .select('*')
+        .eq('module', modCode)
+        .eq('category', cleanCat),
+      client
+        .from('questions')
+        .select('content_code, topic, level')
+        .eq('module', modCode)
+        .eq('category', cleanCat),
+    ]);
+  assertNoError(partsErr, 'Lỗi đọc danh sách phần kiến thức trên Supabase');
+  assertNoError(qErr, 'Lỗi đọc danh sách câu hỏi thuộc nhóm trên Supabase');
+
+  const existingCodes = new Set(
+    (existingPartRows ?? []).map((p) => String(p.code ?? '').trim().toUpperCase())
+  );
+
+  // Collect missing/virtual part codes from payload + orphan questions
+  const missingVirtuals: Array<{
+    code: string;
+    title: string;
+    description: string;
+    level: string;
+  }> = [];
+  for (const vp of input.virtualParts ?? []) {
+    const code = String(vp.code ?? '').trim().toUpperCase();
+    if (!code || existingCodes.has(code)) continue;
+    existingCodes.add(code);
+    missingVirtuals.push({
+      code,
+      title: String(vp.title ?? '').trim() || `Chuyên đề ${code}`,
+      description: String(vp.description ?? '').trim(),
+      level: cleanLevel,
+    });
+  }
+  for (const qr of questionRows ?? []) {
+    const code = String(qr.content_code ?? '').trim().toUpperCase();
+    if (!code || existingCodes.has(code)) continue;
+    existingCodes.add(code);
+    missingVirtuals.push({
+      code,
+      title: String(qr.topic ?? '').trim() || `Chuyên đề ${code}`,
+      description: '',
+      level: String(qr.level ?? cleanLevel).trim().toUpperCase() || cleanLevel,
+    });
+  }
+
+  if (missingVirtuals.length > 0) {
+    let nextOrder = (existingPartRows ?? []).length + 1;
+    const toInsert = missingVirtuals.map((mv) => ({
+      id: makeId('part'),
+      module: modCode,
+      level: mv.level,
+      category: cleanCat,
+      code: mv.code,
+      title: mv.title,
+      description: mv.description,
+      order_index: nextOrder++,
+      is_enabled: input.isEnabled,
+    }));
+    const { error: insErr } = await client.from('knowledge_parts').upsert(toInsert, {
+      onConflict: 'module,category,code',
+      ignoreDuplicates: true,
+    });
+    if (isMissingColumnError(insErr)) {
+      throw new SupabaseStoreError(
+        400,
+        'CSDL Supabase chưa có cột is_enabled trên bảng knowledge_parts. Vui lòng chạy lệnh SQL: alter table public.knowledge_parts add column if not exists is_enabled boolean not null default true;'
+      );
+    }
+    assertNoError(insErr, 'Lỗi khởi tạo phần kiến thức trên Supabase');
+  }
+
+  const { data: updatedRows, error: updErr } = await client
+    .from('knowledge_parts')
+    .update({ is_enabled: input.isEnabled })
+    .eq('module', modCode)
+    .eq('category', cleanCat)
+    .select('*');
+  if (isMissingColumnError(updErr)) {
+    throw new SupabaseStoreError(
+      400,
+      'CSDL Supabase chưa có cột is_enabled trên bảng knowledge_parts. Vui lòng chạy lệnh SQL: alter table public.knowledge_parts add column if not exists is_enabled boolean not null default true;'
+    );
+  }
+  assertNoError(updErr, 'Lỗi cập nhật hàng loạt trạng thái phần kiến thức trên Supabase');
+
+  const parts: KnowledgePart[] = (updatedRows ?? []).map((p) => ({
+    id: String(p.id),
+    module: String(p.module),
+    level: String(p.level),
+    category: String(p.category),
+    code: String(p.code),
+    title: String(p.title ?? ''),
+    description: String(p.description ?? ''),
+    orderIndex: Number(p.order_index ?? 1),
+    isEnabled:
+      p.is_enabled === undefined || p.is_enabled === null
+        ? input.isEnabled
+        : Boolean(p.is_enabled),
+  }));
+
+  return {
+    ok: true,
+    updatedCount: parts.length,
+    isEnabled: input.isEnabled,
+    parts,
+  };
 }
 
 export async function createQuestionOnSupabase(
@@ -1999,7 +2338,8 @@ export async function importQuestionBankToSupabase(
     knowledgeParts?: KnowledgePart[];
     questions: Question[];
     questionSets?: QuestionSet[];
-  }
+  },
+  mode: 'merge' | 'replace' = 'merge'
 ) {
   const payload = buildQuestionBankSupabasePayload({
     modules: input.modules,
@@ -2038,6 +2378,93 @@ export async function importQuestionBankToSupabase(
       .from('question_sets')
       .upsert(payload.questionSets, { onConflict: 'id' });
     assertNoError(error, 'Lỗi nhập question_sets lên Supabase');
+  }
+
+  if (mode === 'replace') {
+    const keepSetIds = new Set(payload.questionSets.map((s) => s.id));
+    const keepQuestionIds = new Set(payload.questions.map((q) => q.id));
+    const keepPartKeys = new Set(
+      payload.parts.map((p) => `${p.module}::${p.category}::${p.code}`)
+    );
+    const keepCatKeys = new Set(
+      payload.categories.map((c) => `${c.module}::${c.code}`)
+    );
+    const keepModCodes = new Set(payload.modules.map((m) => m.code));
+
+    const { data: existingSets } = await client
+      .from('question_sets')
+      .select('id');
+    const delSetIds = (existingSets ?? [])
+      .map((r) => String(r.id))
+      .filter((id) => !keepSetIds.has(id));
+    if (delSetIds.length > 0) {
+      const { error } = await client
+        .from('question_sets')
+        .delete()
+        .in('id', delSetIds);
+      assertNoError(error, 'Lỗi dọn bộ đề cũ khi thay thế ngân hàng');
+    }
+
+    const { data: existingQuestions } = await client
+      .from('questions')
+      .select('id');
+    const delQIds = (existingQuestions ?? [])
+      .map((r) => String(r.id))
+      .filter((id) => !keepQuestionIds.has(id));
+    if (delQIds.length > 0) {
+      const { error } = await client
+        .from('questions')
+        .delete()
+        .in('id', delQIds);
+      assertNoError(error, 'Lỗi dọn câu hỏi cũ khi thay thế ngân hàng');
+    }
+
+    const { data: existingParts } = await client
+      .from('knowledge_parts')
+      .select('id, module, category, code');
+    const delPartIds = (existingParts ?? [])
+      .filter(
+        (r) =>
+          !keepPartKeys.has(
+            `${String(r.module)}::${String(r.category)}::${String(r.code)}`
+          )
+      )
+      .map((r) => String(r.id));
+    if (delPartIds.length > 0) {
+      const { error } = await client
+        .from('knowledge_parts')
+        .delete()
+        .in('id', delPartIds);
+      assertNoError(error, 'Lỗi dọn phần kiến thức cũ khi thay thế ngân hàng');
+    }
+
+    const { data: existingCats } = await client
+      .from('knowledge_categories')
+      .select('id, module, code');
+    const delCatIds = (existingCats ?? [])
+      .filter((r) => !keepCatKeys.has(`${String(r.module)}::${String(r.code)}`))
+      .map((r) => String(r.id));
+    if (delCatIds.length > 0) {
+      const { error } = await client
+        .from('knowledge_categories')
+        .delete()
+        .in('id', delCatIds);
+      assertNoError(error, 'Lỗi dọn nhóm kiến thức cũ khi thay thế ngân hàng');
+    }
+
+    const { data: existingMods } = await client
+      .from('ic3_modules')
+      .select('id, code');
+    const delModIds = (existingMods ?? [])
+      .filter((r) => !keepModCodes.has(String(r.code)))
+      .map((r) => String(r.id));
+    if (delModIds.length > 0) {
+      const { error } = await client
+        .from('ic3_modules')
+        .delete()
+        .in('id', delModIds);
+      assertNoError(error, 'Lỗi dọn mô-đun cũ khi thay thế ngân hàng');
+    }
   }
 
   return {
@@ -3003,13 +3430,13 @@ export async function testSupabaseConnectionOnServer(
     {
       table: 'knowledge_categories',
       label: 'Nhóm kiến thức (GM, OT...)',
-      selectCols: 'id, module, code',
+      selectCols: 'id, module, code, is_enabled',
       localCount: referenceDb?.knowledgeCategories?.length ?? null,
     },
     {
       table: 'knowledge_parts',
       label: 'Phần kiến thức (GM1, OT1...)',
-      selectCols: 'id, module, category, code',
+      selectCols: 'id, module, category, code, is_enabled',
       localCount: referenceDb?.knowledgeParts?.length ?? null,
     },
     {

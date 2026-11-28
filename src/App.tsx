@@ -10,6 +10,7 @@ import {
   LogOut,
   Menu,
   Moon,
+  RefreshCw,
   ShieldCheck,
   Sun,
   Swords,
@@ -23,6 +24,11 @@ import { QuestionBankView } from './components/QuestionBankView';
 import { ReportsView } from './components/ReportsView';
 import { SchoolsStudentsView } from './components/SchoolsStudentsView';
 import { SupabaseView } from './components/SupabaseView';
+import {
+  CardGridSkeleton,
+  ListSkeleton,
+  TableSkeletonCard,
+} from './components/TableSkeleton';
 import { TeacherManagementView } from './components/TeacherManagementView';
 import { ToastContainer, type ToastItem } from './components/ToastContainer';
 import type { AdminDatabase } from './types/ic3';
@@ -235,6 +241,7 @@ export default function App() {
   const currentNav = visibleNavItems.find((n) => n.id === effectiveTab)!;
   const scopedSchoolId: string | null = null;
   const supabaseStatusText = formatSupabaseLoadingStatus(activeSupabaseTasks);
+  const isFetchingData = loadingDb || syncingStartupSupabase;
 
   return (
     <div className="h-dvh overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex">
@@ -369,7 +376,27 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={refreshData}
+              disabled={isFetchingData}
+              aria-label="Làm mới dữ liệu từ máy chủ"
+              title="Làm mới dữ liệu từ máy chủ"
+              data-testid="header-refresh-btn"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-55 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${
+                  isFetchingData
+                    ? 'animate-spin text-blue-600 dark:text-blue-400'
+                    : ''
+                }`}
+              />
+              <span className="hidden sm:inline">
+                {isFetchingData ? 'Đang tải...' : 'Làm mới'}
+              </span>
+            </button>
             <button
               type="button"
               onClick={() => setIsDark((v) => !v)}
@@ -406,8 +433,8 @@ export default function App() {
             </div>
           )}
 
-          {!db && (loadingDb || syncingStartupSupabase) ? (
-            <div className="space-y-4">
+          {!db && isFetchingData ? (
+            <div className="space-y-6" data-testid="bootstrap-skeleton">
               <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-600 dark:text-slate-300">
                 <Loader2 className="w-4 h-4 animate-spin text-blue-600 dark:text-blue-400 shrink-0" />
                 <span>
@@ -416,15 +443,85 @@ export default function App() {
                     : 'Đang tải dữ liệu hệ thống...'}
                 </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-                {[1, 2, 3, 4].map((i) => (
-                  <div
-                    key={i}
-                    className="h-28 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 animate-pulse"
-                  />
-                ))}
-              </div>
-              <div className="h-72 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 animate-pulse" />
+              {effectiveTab === 'teachers' ? (
+                <TableSkeletonCard
+                  title="Danh sách Tài khoản Giáo viên"
+                  subtitle="Đang tải danh sách tài khoản và phân quyền..."
+                  rows={6}
+                  rowHeightClass=""
+                  ariaLabel="Đang tải danh sách giáo viên..."
+                  columns={[
+                    { header: 'Giáo viên', variant: 'twoLine', widths: ['w-36', 'w-44'], cellClassName: 'py-3 pr-4' },
+                    { header: 'Vai trò (Quyền)', variant: 'text', widths: ['w-32', 'w-28'], cellClassName: 'py-3 pr-4' },
+                    { header: 'Trạng thái tài khoản', variant: 'iconBox', align: 'center', cellClassName: 'py-3 px-4 text-center' },
+                    { header: 'Thao tác', variant: 'actions', align: 'right', cellClassName: 'py-3 text-right' },
+                  ]}
+                />
+              ) : effectiveTab === 'reports' ? (
+                <TableSkeletonCard
+                  title="Tổng hợp Thành tích Học sinh"
+                  subtitle="Đang tải thống kê kết quả học tập..."
+                  rows={6}
+                  ariaLabel="Đang tải bảng báo cáo thành tích..."
+                  columns={[
+                    { header: 'Mã HS', variant: 'mono', widths: ['w-16', 'w-20'] },
+                    { header: 'Họ và tên', variant: 'text', widths: ['w-32', 'w-40'] },
+                    { header: 'Lớp', variant: 'text', widths: ['w-14', 'w-16'] },
+                    { header: 'Số lượt', variant: 'mono', align: 'right', widths: ['w-8'] },
+                    { header: 'Đạt chuẩn', variant: 'mono', align: 'right', widths: ['w-10'] },
+                    { header: 'Điểm cao nhất', variant: 'mono', align: 'right', widths: ['w-10'] },
+                    { header: 'Điểm TB', variant: 'mono', align: 'right', widths: ['w-10'] },
+                    { header: 'Thời gian TB', variant: 'mono', align: 'right', widths: ['w-14'], cellClassName: 'py-2.5' },
+                  ]}
+                />
+              ) : effectiveTab === 'tasks' || effectiveTab === 'battle' || effectiveTab === 'supabase' ? (
+                <TableSkeletonCard
+                  title="Đang tải dữ liệu bảng"
+                  subtitle="Vui lòng đợi phản hồi từ API..."
+                  rows={6}
+                  ariaLabel="Đang tải bảng dữ liệu..."
+                  columns={[
+                    { header: 'Mã', variant: 'mono', widths: ['w-20', 'w-24'] },
+                    { header: 'Thông tin', variant: 'text', widths: ['w-40', 'w-48'] },
+                    { header: 'Tiến độ', variant: 'mono', widths: ['w-24', 'w-28'] },
+                    { header: 'Chỉ số', variant: 'mono', align: 'right', widths: ['w-14', 'w-16'] },
+                    { header: 'Trạng thái', variant: 'text', align: 'right', widths: ['w-24', 'w-28'], cellClassName: 'py-2.5 text-right' },
+                  ]}
+                />
+              ) : effectiveTab === 'schools' || effectiveTab === 'questions' ? (
+                <CardGridSkeleton
+                  count={effectiveTab === 'questions' ? 3 : 6}
+                  columnsClassName={
+                    effectiveTab === 'questions'
+                      ? 'grid-cols-1 md:grid-cols-3 gap-4'
+                      : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4'
+                  }
+                  ariaLabel="Đang tải danh sách dữ liệu..."
+                />
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {[1, 2, 3, 4].map((i) => (
+                      <div
+                        key={i}
+                        className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-3"
+                      >
+                        <div className="h-3 w-28 rounded bg-slate-200 dark:bg-slate-800 motion-safe:animate-pulse" />
+                        <div className="h-8 w-20 rounded bg-slate-200 dark:bg-slate-800 motion-safe:animate-pulse" />
+                        <div className="h-3 w-32 rounded bg-slate-100 dark:bg-slate-800/70 motion-safe:animate-pulse" />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
+                      <ListSkeleton variant="detailed" rows={4} />
+                    </div>
+                    <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
+                      <ListSkeleton variant="compact" rows={5} />
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           ) : db ? (
             <>
@@ -432,6 +529,7 @@ export default function App() {
                 <OverviewView
                   db={db}
                   scopedSchoolId={scopedSchoolId}
+                  loading={isFetchingData}
                   onNavigate={setActiveTab}
                 />
               )}
@@ -439,6 +537,7 @@ export default function App() {
                 <SchoolsStudentsView
                   db={db}
                   currentTeacher={teacher}
+                  loading={isFetchingData}
                   onRefresh={refreshData}
                   onNotify={notify}
                   onOpenTeachersTab={
@@ -452,6 +551,7 @@ export default function App() {
                 <TeacherManagementView
                   db={db}
                   currentTeacher={teacher}
+                  loading={isFetchingData}
                   onRefresh={refreshData}
                   onNotify={notify}
                   onOpenSupabase={
@@ -465,20 +565,16 @@ export default function App() {
                 <QuestionBankView
                   db={db}
                   canEdit={permissions.canEditQuestionBank}
-                  canManageSupabase={permissions.canManageSupabase}
+                  loading={isFetchingData}
                   onRefresh={refreshData}
                   onNotify={notify}
-                  onOpenSupabase={
-                    permissions.canManageSupabase
-                      ? () => setActiveTab('supabase')
-                      : undefined
-                  }
                 />
               )}
               {effectiveTab === 'tasks' && (
                 <ClassTasksView
                   db={db}
                   currentTeacher={teacher}
+                  loading={isFetchingData}
                   onRefresh={refreshData}
                   onNotify={notify}
                 />
@@ -487,16 +583,22 @@ export default function App() {
                 <BattleControlView
                   db={db}
                   currentTeacher={teacher}
+                  loading={isFetchingData}
                   onRefresh={refreshData}
                   onNotify={notify}
                 />
               )}
               {effectiveTab === 'reports' && (
-                <ReportsView db={db} scopedSchoolId={scopedSchoolId} />
+                <ReportsView
+                  db={db}
+                  scopedSchoolId={scopedSchoolId}
+                  loading={isFetchingData}
+                />
               )}
               {effectiveTab === 'supabase' && permissions.canManageSupabase && (
                 <SupabaseView
                   db={db}
+                  loading={isFetchingData}
                   onRefresh={refreshData}
                   onNotify={notify}
                 />

@@ -185,8 +185,34 @@ test('Schools -> Classes -> Students full CRUD & cascade delete', async () => {
   assert.equal(classRes.status, 201);
   const classId = classRes.data.id;
 
+  const batchClassRes = await apiFetch<{
+    created: Array<{ id: string; name: string; grade: string }>;
+    skipped: string[];
+  }>('/api/classes/batch', {
+    method: 'POST',
+    token: lv1Token,
+    body: {
+      schoolId,
+      rows: [
+        { name: '6A9', grade: 'Khối 6' }, // duplicate
+        { name: '7A5', grade: '7' },
+        { name: '8A2', grade: '' },
+      ],
+    },
+  });
+  assert.equal(batchClassRes.status, 201);
+  assert.deepEqual(batchClassRes.data.skipped, ['6A9']);
+  assert.equal(batchClassRes.data.created.length, 2);
+  assert.equal(batchClassRes.data.created[0].grade, 'Khối 7');
+  assert.equal(batchClassRes.data.created[1].grade, 'Khối 8');
+
   const batchRes = await apiFetch<{
-    created: Array<{ id: string; passwordHash: string }>;
+    created: Array<{
+      id: string;
+      studentCode: string;
+      passwordHash: string;
+      alwaysBreakReady: boolean;
+    }>;
     skipped: string[];
   }>('/api/students/batch', {
     method: 'POST',
@@ -194,14 +220,18 @@ test('Schools -> Classes -> Students full CRUD & cascade delete', async () => {
     body: {
       classId,
       rows: [
-        { fullName: 'Nguyễn Minh An', studentCode: '6A9_AN' },
-        { fullName: 'Trần Thị Bình', studentCode: '6A9_BINH' },
+        { fullName: 'Nguyễn Minh An', alwaysBreakReady: true },
+        { fullName: 'Trần Thị Bình' },
       ],
     },
   });
   assert.equal(batchRes.status, 201);
   assert.equal(batchRes.data.created.length, 2);
+  assert.equal(batchRes.data.created[0].studentCode, '6A9-01');
   assert.equal(batchRes.data.created[0].passwordHash, 'nguyenminhan');
+  assert.equal(batchRes.data.created[0].alwaysBreakReady, false);
+  assert.equal(batchRes.data.created[1].studentCode, '6A9-02');
+  assert.equal(batchRes.data.created[1].alwaysBreakReady, false);
 
   const delSchool = await apiFetch<{ ok: boolean }>(`/api/schools/${schoolId}`, {
     method: 'DELETE',
@@ -235,20 +265,57 @@ test('Question Bank 4-tier CRUD, QuestionSet membership & batch deletion', async
   });
   assert.equal(modRes.status, 201);
 
-  const catRes = await apiFetch<{ id: string; code: string }>(
-    '/api/knowledge-categories',
+  const catRes = await apiFetch<{
+    id: string;
+    code: string;
+    isEnabled: boolean;
+  }>('/api/knowledge-categories', {
+    method: 'POST',
+    token: masterToken,
+    body: {
+      module: 'custom_test_mod',
+      code: 'TCAT',
+      title: 'Test Cat',
+      description: 'Cat desc',
+      isEnabled: false,
+    },
+  });
+  assert.equal(catRes.status, 201);
+  assert.equal(catRes.data.isEnabled, false);
+
+  // teacher_lv1 cannot toggle readiness
+  const lv1Toggle = await apiFetch<{ error: string }>(
+    `/api/knowledge-categories/${catRes.data.id}`,
     {
-      method: 'POST',
-      token: masterToken,
-      body: {
-        module: 'custom_test_mod',
-        code: 'TCAT',
-        title: 'Test Cat',
-        description: 'Cat desc',
-      },
+      method: 'PUT',
+      token: lv1Token,
+      body: { isEnabled: true },
     }
   );
-  assert.equal(catRes.status, 201);
+  assert.equal(lv1Toggle.status, 403);
+
+  // Master can toggle isEnabled on/off without re-sending title
+  const enableCatRes = await apiFetch<{ id: string; isEnabled: boolean }>(
+    `/api/knowledge-categories/${catRes.data.id}`,
+    {
+      method: 'PUT',
+      token: masterToken,
+      body: { isEnabled: true },
+    }
+  );
+  assert.equal(enableCatRes.status, 200);
+  assert.equal(enableCatRes.data.isEnabled, true);
+
+  const disableCatRes = await apiFetch<{ id: string; isEnabled: boolean }>(
+    `/api/knowledge-categories/${catRes.data.id}`,
+    {
+      method: 'PUT',
+      token: masterToken,
+      body: { isEnabled: false },
+    }
+  );
+  assert.equal(disableCatRes.status, 200);
+  assert.equal(disableCatRes.data.isEnabled, false);
 
   const partRes = await apiFetch<{ id: string; code: string }>(
     '/api/knowledge-parts',
@@ -628,5 +695,317 @@ test('api/index normalizeApiUrl restores original /api/* routes across Vercel re
   assert.equal(normalizeApiUrl('/api/index?__path='), '/api');
   assert.equal(normalizeApiUrl('/api/health'), '/api/health');
 });
+
+test('POST /api/question-bank/import-remote enforces role guard and supports merge vs replace modes', async () => {
+  const beforeBoot = await apiFetch<AdminDatabase>('/api/bootstrap', {
+    token: masterToken,
+  });
+  const initialCount = beforeBoot.data.questions.length;
+  assert(initialCount >= 1);
+
+  const importedQ = {
+    id: 'q_api_imported_01',
+    module: 'ai_literacy',
+    level: 'LV4',
+    category: 'AI',
+    contentCode: 'AI1',
+    topicOrder: 1,
+    topic: 'AI Import API',
+    type: 'single' as const,
+    prompt: 'Câu hỏi nhập qua API?',
+    payload: {
+      options: [
+        { id: 'a', text: 'Đáp án đúng' },
+        { id: 'b', text: 'Đáp án sai' },
+      ],
+      correctOptionId: 'a',
+    },
+    explanation: '',
+    createdAt: '2026-11-24T00:00:00.000Z',
+    updatedAt: '2026-11-24T00:00:00.000Z',
+  };
+
+  // Teacher LV1 is forbidden from importing Question Bank
+  const forbiddenRes = await apiFetch<{ error: string }>(
+    '/api/question-bank/import-remote',
+    {
+      method: 'POST',
+      token: lv1Token,
+      body: { questions: [importedQ], mode: 'merge' },
+    }
+  );
+  assert.equal(forbiddenRes.status, 403);
+
+  // Merge keeps existing questions and synthesizes new module/category/part
+  const mergeRes = await apiFetch<{
+    ok: boolean;
+    counts: { questions: number; modules: number };
+  }>('/api/question-bank/import-remote', {
+    method: 'POST',
+    token: masterToken,
+    body: {
+      questions: [importedQ],
+      mode: 'merge',
+    },
+  });
+  assert.equal(mergeRes.status, 200);
+  assert.equal(mergeRes.data.ok, true);
+  assert.equal(mergeRes.data.counts.questions, initialCount + 1);
+
+  // Replace swaps questions cleanly with imported list
+  const replaceRes = await apiFetch<{
+    ok: boolean;
+    counts: { questions: number; questionSets: number };
+  }>('/api/question-bank/import-remote', {
+    method: 'POST',
+    token: masterToken,
+    body: {
+      modules: [
+        {
+          id: 'mod_ai_lit',
+          code: 'ai_literacy',
+          level: 'LV4',
+          title: 'AI Literacy',
+          description: '',
+          orderIndex: 1,
+        },
+      ],
+      knowledgeCategories: [
+        {
+          id: 'cat_ai_lit',
+          module: 'ai_literacy',
+          code: 'AI',
+          title: 'AI Cơ bản',
+          description: '',
+          orderIndex: 1,
+          isEnabled: true,
+        },
+      ],
+      knowledgeParts: [
+        {
+          id: 'part_ai1',
+          module: 'ai_literacy',
+          level: 'LV4',
+          category: 'AI',
+          code: 'AI1',
+          title: 'Khái niệm AI',
+          description: '',
+          orderIndex: 1,
+          isEnabled: true,
+        },
+      ],
+      questions: [importedQ],
+      questionSets: [],
+      mode: 'replace',
+    },
+  });
+  assert.equal(replaceRes.status, 200);
+  assert.equal(replaceRes.data.counts.questions, 1);
+  assert.equal(replaceRes.data.counts.questionSets, 0);
+});
+
+test('knowledge parts API persists isEnabled on create, supports partial readiness toggle, and enforces RBAC', async () => {
+  const createDisabledRes = await apiFetch<{
+    id: string;
+    code: string;
+    isEnabled: boolean;
+  }>('/api/knowledge-parts', {
+    method: 'POST',
+    token: masterToken,
+    body: {
+      module: 'ai_literacy',
+      level: 'LV4',
+      category: 'AI',
+      code: 'OT9',
+      title: 'Phần OT9 — Chuyên đề thử nghiệm',
+      description: 'Chưa mở cho học sinh',
+      isEnabled: false,
+    },
+  });
+  assert.equal(createDisabledRes.status, 201);
+  assert.equal(createDisabledRes.data.code, 'OT9');
+  assert.equal(createDisabledRes.data.isEnabled, false);
+
+  const createDefaultRes = await apiFetch<{
+    id: string;
+    code: string;
+    isEnabled: boolean;
+  }>('/api/knowledge-parts', {
+    method: 'POST',
+    token: masterToken,
+    body: {
+      module: 'ai_literacy',
+      level: 'LV4',
+      category: 'AI',
+      code: 'OT10',
+      title: 'Phần OT10 — Mặc định mở',
+      description: '',
+    },
+  });
+  assert.equal(createDefaultRes.status, 201);
+  assert.equal(createDefaultRes.data.isEnabled, true);
+
+  // Partial toggle without sending title
+  const enableRes = await apiFetch<{
+    id: string;
+    title: string;
+    isEnabled: boolean;
+  }>(`/api/knowledge-parts/${createDisabledRes.data.id}`, {
+    method: 'PUT',
+    token: masterToken,
+    body: { isEnabled: true },
+  });
+  assert.equal(enableRes.status, 200);
+  assert.equal(enableRes.data.isEnabled, true);
+  assert.equal(enableRes.data.title, 'Phần OT9 — Chuyên đề thử nghiệm');
+
+  const disableRes = await apiFetch<{
+    id: string;
+    isEnabled: boolean;
+  }>(`/api/knowledge-parts/${createDisabledRes.data.id}`, {
+    method: 'PUT',
+    token: masterToken,
+    body: { isEnabled: false },
+  });
+  assert.equal(disableRes.status, 200);
+  assert.equal(disableRes.data.isEnabled, false);
+
+  // teacher_lv1 is read-only and must receive 403
+  const forbiddenRes = await apiFetch<{ error: string }>(
+    `/api/knowledge-parts/${createDisabledRes.data.id}`,
+    {
+      method: 'PUT',
+      token: lv1Token,
+      body: { isEnabled: true },
+    }
+  );
+  assert.equal(forbiddenRes.status, 403);
+
+  // Verify persisted via bootstrap
+  const bootRes = await apiFetch<AdminDatabase>('/api/bootstrap', {
+    token: masterToken,
+  });
+  assert.equal(bootRes.status, 200);
+  const ot9 = bootRes.data.knowledgeParts.find((p) => p.code === 'OT9');
+  const ot10 = bootRes.data.knowledgeParts.find((p) => p.code === 'OT10');
+  assert.equal(ot9?.isEnabled, false);
+  assert.equal(ot10?.isEnabled, true);
+});
+
+test('POST /api/knowledge-parts/batch-readiness toggles all parts in a category without affecting other categories and enforces RBAC', async () => {
+  // Create a sibling category part that must stay untouched
+  const otherCatPartRes = await apiFetch<{ id: string; isEnabled: boolean }>(
+    '/api/knowledge-parts',
+    {
+      method: 'POST',
+      token: masterToken,
+      body: {
+        module: 'ai_literacy',
+        level: 'LV4',
+        category: 'OTHER',
+        code: 'OTH1',
+        title: 'Phần nhóm khác',
+        description: '',
+        isEnabled: true,
+      },
+    }
+  );
+  assert.equal(otherCatPartRes.status, 201);
+
+  // RBAC check: teacher_lv1 receives 403
+  const lv1Res = await apiFetch<{ error: string }>(
+    '/api/knowledge-parts/batch-readiness',
+    {
+      method: 'POST',
+      token: lv1Token,
+      body: {
+        module: 'ai_literacy',
+        level: 'LV4',
+        category: 'AI',
+        isEnabled: false,
+      },
+    }
+  );
+  assert.equal(lv1Res.status, 403);
+
+  // Invalid body returns 400
+  const badRes = await apiFetch<{ error: string }>(
+    '/api/knowledge-parts/batch-readiness',
+    {
+      method: 'POST',
+      token: masterToken,
+      body: { module: 'ai_literacy', category: 'AI' },
+    }
+  );
+  assert.equal(badRes.status, 400);
+
+  // Disable all parts in ai_literacy / AI (including virtual part OT11)
+  const disableAllRes = await apiFetch<{
+    ok: boolean;
+    updatedCount: number;
+    isEnabled: boolean;
+    parts: Array<{ code: string; isEnabled: boolean }>;
+  }>('/api/knowledge-parts/batch-readiness', {
+    method: 'POST',
+    token: masterToken,
+    body: {
+      module: 'ai_literacy',
+      level: 'LV4',
+      category: 'AI',
+      isEnabled: false,
+      virtualParts: [{ code: 'OT11', title: 'Phần OT11 ảo' }],
+    },
+  });
+  assert.equal(disableAllRes.status, 200);
+  assert.equal(disableAllRes.data.ok, true);
+  assert.equal(disableAllRes.data.isEnabled, false);
+  assert.ok(disableAllRes.data.updatedCount >= 4);
+  assert.equal(
+    disableAllRes.data.parts.every((p) => p.isEnabled === false),
+    true
+  );
+
+  // Enable all parts in ai_literacy / AI
+  const enableAllRes = await apiFetch<{
+    ok: boolean;
+    updatedCount: number;
+    isEnabled: boolean;
+    parts: Array<{ code: string; isEnabled: boolean }>;
+  }>('/api/knowledge-parts/batch-readiness', {
+    method: 'POST',
+    token: masterToken,
+    body: {
+      module: 'ai_literacy',
+      level: 'LV4',
+      category: 'AI',
+      isEnabled: true,
+    },
+  });
+  assert.equal(enableAllRes.status, 200);
+  assert.equal(enableAllRes.data.isEnabled, true);
+  assert.equal(
+    enableAllRes.data.parts.every((p) => p.isEnabled === true),
+    true
+  );
+
+  // Confirm OTHER category remained enabled after disable-all, and AI parts are enabled
+  const bootRes = await apiFetch<AdminDatabase>('/api/bootstrap', {
+    token: masterToken,
+  });
+  assert.equal(bootRes.status, 200);
+  const aiParts = bootRes.data.knowledgeParts.filter(
+    (p) => p.module === 'ai_literacy' && p.category === 'AI'
+  );
+  const otherPart = bootRes.data.knowledgeParts.find((p) => p.code === 'OTH1');
+  assert.ok(aiParts.some((p) => p.code === 'OT11'));
+  assert.equal(
+    aiParts.every((p) => p.isEnabled === true),
+    true
+  );
+  assert.equal(otherPart?.isEnabled, true);
+});
+
+
+
 
 

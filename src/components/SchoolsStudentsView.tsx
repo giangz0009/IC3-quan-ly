@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Building2,
   ChevronRight,
+  Download,
+  FileSpreadsheet,
   GraduationCap,
   KeyRound,
   Loader2,
@@ -27,17 +29,66 @@ import {
   filterClassesByGradeAndQuery,
   filterSchools,
   filterStudentsByStatusAndQuery,
+  formatClassesToCsv,
+  formatStudentsToCsv,
   getTeacherPermissions,
   normalizeVietnamesePassword,
+  parseClassesCsv,
   parseStudentsCsv,
   summarizeClassStudentStats,
   summarizeSchoolHierarchyStats,
+  type ParsedClassRow,
+  type ParsedStudentRow,
   type StudentStatusFilter,
 } from '../utils/ic3Rules';
+import {
+  buildClassesExcelBuffer,
+  buildClassesSampleExcelBuffer,
+  buildStudentsExcelBuffer,
+  buildStudentsSampleExcelBuffer,
+  parseClassesExcelSheet,
+  parseStudentsExcelSheet,
+  readTabularExcelWorkbookBuffer,
+  type ParsedExcelWorkbookData,
+} from '../utils/ic3Excel';
+import { CardGridSkeleton, TableSkeletonRows } from './TableSkeleton';
+
+function slugifyFilePart(value: string): string {
+  return (
+    value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/Đ/g, 'D')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'du-lieu'
+  );
+}
+
+function triggerFileDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function createExcelBlob(bytes: Uint8Array): Blob {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return new Blob([copy.buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+}
 
 interface SchoolsStudentsViewProps {
   db: Omit<AdminDatabase, 'teachers'> & { teachers: SafeTeacher[] };
   currentTeacher: SafeTeacher;
+  loading?: boolean;
   onRefresh: () => Promise<void>;
   onNotify: (msg: string, isError?: boolean) => void;
   onOpenTeachersTab?: () => void;
@@ -52,6 +103,7 @@ type ConfirmAction =
 export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
   db,
   currentTeacher,
+  loading = false,
   onRefresh,
   onNotify,
   onOpenTeachersTab,
@@ -88,10 +140,41 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
     alwaysBreakReady: false,
   });
 
-  const [showCsvModal, setShowCsvModal] = useState(false);
-  const [csvText, setCsvText] = useState(
-    'Họ tên,Mã HS\nNguyễn Hoàng Nam,6A1-06\nTrần Ngọc Hân,6A1-07'
+  // Class Import / Export state
+  const [showClassImportModal, setShowClassImportModal] = useState(false);
+  const [classImportMode, setClassImportMode] = useState<'file' | 'paste'>('file');
+  const [classPasteText, setClassPasteText] = useState(
+    'Tên lớp,Khối\n6A3,Khối 6\n6A4,Khối 6\n7A3,Khối 7'
   );
+  const [classExcelWb, setClassExcelWb] =
+    useState<ParsedExcelWorkbookData | null>(null);
+  const [classExcelSheet, setClassExcelSheet] = useState('');
+  const [classImportFileName, setClassImportFileName] = useState('');
+  const [classFileCsvText, setClassFileCsvText] = useState<string | null>(null);
+  const [classFileError, setClassFileError] = useState<string | null>(null);
+  const classFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [showClassExportModal, setShowClassExportModal] = useState(false);
+  const [classExportScope, setClassExportScope] = useState<'all' | 'filtered'>('all');
+  const [classExportFormat, setClassExportFormat] = useState<'xlsx' | 'csv'>('xlsx');
+
+  // Student Import / Export state
+  const [showStudentImportModal, setShowStudentImportModal] = useState(false);
+  const [studentImportMode, setStudentImportMode] = useState<'file' | 'paste'>('file');
+  const [csvText, setCsvText] = useState(
+    'Họ và tên\nNguyễn Hoàng Nam\nTrần Ngọc Hân\nLê Minh Khôi'
+  );
+  const [studentExcelWb, setStudentExcelWb] =
+    useState<ParsedExcelWorkbookData | null>(null);
+  const [studentExcelSheet, setStudentExcelSheet] = useState('');
+  const [studentImportFileName, setStudentImportFileName] = useState('');
+  const [studentFileCsvText, setStudentFileCsvText] = useState<string | null>(null);
+  const [studentFileError, setStudentFileError] = useState<string | null>(null);
+  const studentFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [showStudentExportModal, setShowStudentExportModal] = useState(false);
+  const [studentExportScope, setStudentExportScope] = useState<'all' | 'filtered'>('all');
+  const [studentExportFormat, setStudentExportFormat] = useState<'xlsx' | 'csv'>('xlsx');
 
   // Confirm Modal for destructive / bulk operations
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
@@ -102,7 +185,10 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
       showSchoolModal ||
       showClassModal ||
       showStudentModal ||
-      showCsvModal ||
+      showClassImportModal ||
+      showClassExportModal ||
+      showStudentImportModal ||
+      showStudentExportModal ||
       confirmAction !== null;
     if (!hasOpenModal) return;
 
@@ -110,8 +196,14 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
       if (e.key !== 'Escape' || busy) return;
       if (confirmAction) {
         setConfirmAction(null);
-      } else if (showCsvModal) {
-        setShowCsvModal(false);
+      } else if (showStudentExportModal) {
+        setShowStudentExportModal(false);
+      } else if (showStudentImportModal) {
+        setShowStudentImportModal(false);
+      } else if (showClassExportModal) {
+        setShowClassExportModal(false);
+      } else if (showClassImportModal) {
+        setShowClassImportModal(false);
       } else if (showStudentModal) {
         setShowStudentModal(false);
         setEditingStudent(null);
@@ -130,7 +222,10 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
     showSchoolModal,
     showClassModal,
     showStudentModal,
-    showCsvModal,
+    showClassImportModal,
+    showClassExportModal,
+    showStudentImportModal,
+    showStudentExportModal,
     confirmAction,
     busy,
   ]);
@@ -380,35 +475,321 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
     }
   }
 
-  const parsedCsv = useMemo(
-    () => parseStudentsCsv(csvText, activeClass?.name || 'HS'),
-    [csvText, activeClass?.name]
+  const existingClassNamesSet = useMemo(
+    () => new Set(schoolClasses.map((c) => c.name.trim().toLowerCase())),
+    [schoolClasses]
   );
 
-  async function handleImportCsv(e: React.FormEvent) {
+  const parsedClassImport = useMemo<{
+    rows: ParsedClassRow[];
+    warnings: string[];
+    errors: string[];
+  }>(() => {
+    if (classImportMode === 'paste') {
+      return parseClassesCsv(classPasteText);
+    }
+    if (classExcelWb) {
+      return parseClassesExcelSheet(classExcelWb, classExcelSheet);
+    }
+    if (classFileCsvText !== null) {
+      return parseClassesCsv(classFileCsvText);
+    }
+    return { rows: [], warnings: [], errors: [] };
+  }, [
+    classImportMode,
+    classPasteText,
+    classExcelWb,
+    classExcelSheet,
+    classFileCsvText,
+  ]);
+
+  const validNewClassRows = useMemo(
+    () =>
+      parsedClassImport.rows.filter(
+        (r) => !existingClassNamesSet.has(r.name.trim().toLowerCase())
+      ),
+    [parsedClassImport.rows, existingClassNamesSet]
+  );
+
+  function openClassImportModal() {
+    setClassImportMode('file');
+    setClassExcelWb(null);
+    setClassExcelSheet('');
+    setClassImportFileName('');
+    setClassFileCsvText(null);
+    setClassFileError(null);
+    setShowClassImportModal(true);
+  }
+
+  function openClassExportModal() {
+    const hasFilter = Boolean(classSearch.trim()) || gradeFilter !== 'all';
+    setClassExportScope(hasFilter ? 'filtered' : 'all');
+    setClassExportFormat('xlsx');
+    setShowClassExportModal(true);
+  }
+
+  async function handleSelectClassImportFile(file: File | undefined | null) {
+    if (!file) return;
+    setClassFileError(null);
+    setClassImportFileName(file.name);
+    const lower = file.name.toLowerCase();
+    try {
+      if (lower.endsWith('.csv') || lower.endsWith('.txt')) {
+        const text = await file.text();
+        setClassExcelWb(null);
+        setClassExcelSheet('');
+        setClassFileCsvText(text);
+      } else if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+        const buf = await file.arrayBuffer();
+        const wb = readTabularExcelWorkbookBuffer(buf, [
+          'danhsachlop',
+          'lop',
+          'classes',
+        ]);
+        setClassFileCsvText(null);
+        setClassExcelWb(wb);
+        setClassExcelSheet(wb.activeSheetName);
+        if (wb.sheetNames.length === 0) {
+          setClassFileError('Tệp Excel không có sheet dữ liệu lớp học.');
+        }
+      } else {
+        setClassExcelWb(null);
+        setClassFileCsvText(null);
+        setClassFileError('Chỉ hỗ trợ định dạng tệp .xlsx, .xls hoặc .csv.');
+      }
+    } catch {
+      setClassExcelWb(null);
+      setClassFileCsvText(null);
+      setClassFileError('Không thể đọc tệp đã chọn. Vui lòng kiểm tra lại định dạng.');
+    }
+  }
+
+  function handleDownloadClassSampleExcel() {
+    const bytes = buildClassesSampleExcelBuffer(activeSchool?.name ?? '');
+    triggerFileDownload(
+      createExcelBlob(bytes),
+      'mau-nhap-danh-sach-lop.xlsx'
+    );
+    onNotify('Đã tải file Excel mẫu danh sách lớp học.');
+  }
+
+  async function handleImportClasses(e: React.FormEvent) {
     e.preventDefault();
-    if (!activeClass || parsedCsv.rows.length === 0) return;
+    if (!activeSchool || validNewClassRows.length === 0) return;
+    setBusy(true);
+    try {
+      const res = await api.batchImportClasses(activeSchool.id, validNewClassRows);
+      await onRefresh();
+      setShowClassImportModal(false);
+      onNotify(
+        `Đã nhập ${res.created.length} lớp học${
+          res.skipped.length > 0 ? ` (bỏ qua ${res.skipped.length} lớp trùng tên)` : ''
+        }.`
+      );
+    } catch (err) {
+      onNotify(
+        err instanceof Error ? err.message : 'Lỗi nhập danh sách lớp học.',
+        true
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleExportClasses() {
+    if (!activeSchool) return;
+    const rowsToExport =
+      classExportScope === 'filtered' ? filteredClasses : schoolClasses;
+    if (rowsToExport.length === 0) {
+      onNotify('Không có lớp học nào trong phạm vi xuất.', true);
+      return;
+    }
+    const slug = slugifyFilePart(activeSchool.name);
+    if (classExportFormat === 'xlsx') {
+      const bytes = buildClassesExcelBuffer(
+        rowsToExport,
+        db.students,
+        activeSchool.name
+      );
+      triggerFileDownload(
+        createExcelBlob(bytes),
+        `danh-sach-lop-${slug}.xlsx`
+      );
+    } else {
+      const csv = formatClassesToCsv(rowsToExport, db.students, activeSchool.name);
+      triggerFileDownload(
+        new Blob([csv], { type: 'text/csv;charset=utf-8' }),
+        `danh-sach-lop-${slug}.csv`
+      );
+    }
+    setShowClassExportModal(false);
+    onNotify(
+      `Đã xuất ${rowsToExport.length} lớp học ra định dạng ${classExportFormat.toUpperCase()}.`
+    );
+  }
+
+  const existingStudentNamesSet = useMemo(
+    () => new Set(classStudents.map((s) => s.fullName.trim().toLowerCase())),
+    [classStudents]
+  );
+
+  const parsedStudentImport = useMemo<{
+    rows: ParsedStudentRow[];
+    warnings: string[];
+    errors: string[];
+  }>(() => {
+    const prefix = activeClass?.name || 'HS';
+    const existingList = classStudents.map((s) => s.studentCode);
+    if (studentImportMode === 'paste') {
+      return parseStudentsCsv(csvText, prefix, existingList);
+    }
+    if (studentExcelWb) {
+      return parseStudentsExcelSheet(
+        studentExcelWb,
+        studentExcelSheet,
+        prefix,
+        existingList
+      );
+    }
+    if (studentFileCsvText !== null) {
+      return parseStudentsCsv(studentFileCsvText, prefix, existingList);
+    }
+    return { rows: [], warnings: [], errors: [] };
+  }, [
+    studentImportMode,
+    csvText,
+    studentExcelWb,
+    studentExcelSheet,
+    studentFileCsvText,
+    activeClass?.name,
+    classStudents,
+  ]);
+
+  function openStudentImportModal() {
+    setStudentImportMode('file');
+    setStudentExcelWb(null);
+    setStudentExcelSheet('');
+    setStudentImportFileName('');
+    setStudentFileCsvText(null);
+    setStudentFileError(null);
+    setCsvText('Họ và tên\nNguyễn Hoàng Nam\nTrần Ngọc Hân\nLê Minh Khôi');
+    setShowStudentImportModal(true);
+  }
+
+  function openStudentExportModal() {
+    const hasFilter =
+      Boolean(studentSearch.trim()) || studentStatusFilter !== 'all';
+    setStudentExportScope(hasFilter ? 'filtered' : 'all');
+    setStudentExportFormat('xlsx');
+    setShowStudentExportModal(true);
+  }
+
+  async function handleSelectStudentImportFile(file: File | undefined | null) {
+    if (!file) return;
+    setStudentFileError(null);
+    setStudentImportFileName(file.name);
+    const lower = file.name.toLowerCase();
+    try {
+      if (lower.endsWith('.csv') || lower.endsWith('.txt')) {
+        const text = await file.text();
+        setStudentExcelWb(null);
+        setStudentExcelSheet('');
+        setStudentFileCsvText(text);
+      } else if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+        const buf = await file.arrayBuffer();
+        const wb = readTabularExcelWorkbookBuffer(buf, [
+          'danhsachhocsinh',
+          'hocsinh',
+          'students',
+        ]);
+        setStudentFileCsvText(null);
+        setStudentExcelWb(wb);
+        setStudentExcelSheet(wb.activeSheetName);
+        if (wb.sheetNames.length === 0) {
+          setStudentFileError('Tệp Excel không có sheet dữ liệu học sinh.');
+        }
+      } else {
+        setStudentExcelWb(null);
+        setStudentFileCsvText(null);
+        setStudentFileError('Chỉ hỗ trợ định dạng tệp .xlsx, .xls hoặc .csv.');
+      }
+    } catch {
+      setStudentExcelWb(null);
+      setStudentFileCsvText(null);
+      setStudentFileError('Không thể đọc tệp đã chọn. Vui lòng kiểm tra lại định dạng.');
+    }
+  }
+
+  function handleDownloadStudentSampleExcel() {
+    const clsName = activeClass?.name || '6A1';
+    const bytes = buildStudentsSampleExcelBuffer(clsName);
+    triggerFileDownload(
+      createExcelBlob(bytes),
+      `mau-nhap-hoc-sinh-lop-${slugifyFilePart(clsName)}.xlsx`
+    );
+    onNotify('Đã tải file Excel mẫu danh sách học sinh.');
+  }
+
+  async function handleImportStudents(e: React.FormEvent) {
+    e.preventDefault();
+    if (!activeClass || parsedStudentImport.rows.length === 0) return;
     setBusy(true);
     try {
       const res = await api.batchImportStudents(
         activeClass.id,
-        parsedCsv.rows.map((r) => ({
+        parsedStudentImport.rows.map((r) => ({
           fullName: r.fullName,
-          studentCode: r.studentCode,
         }))
       );
       await onRefresh();
-      setShowCsvModal(false);
+      setShowStudentImportModal(false);
       onNotify(
-        `Đã nhập ${res.created.length} học sinh${
-          res.skipped.length > 0 ? ` (bỏ qua ${res.skipped.length} mã trùng)` : ''
-        }.`
+        `Đã nhập ${res.created.length} học sinh vào lớp ${activeClass.name}.`
       );
     } catch (err) {
-      onNotify(err instanceof Error ? err.message : 'Lỗi nhập CSV.', true);
+      onNotify(
+        err instanceof Error ? err.message : 'Lỗi nhập danh sách học sinh.',
+        true
+      );
     } finally {
       setBusy(false);
     }
+  }
+
+  function handleExportStudents() {
+    if (!activeClass) return;
+    const rowsToExport =
+      studentExportScope === 'filtered' ? filteredStudents : classStudents;
+    if (rowsToExport.length === 0) {
+      onNotify('Không có học sinh nào trong phạm vi xuất.', true);
+      return;
+    }
+    const slug = slugifyFilePart(activeClass.name);
+    if (studentExportFormat === 'xlsx') {
+      const bytes = buildStudentsExcelBuffer(
+        rowsToExport,
+        activeClass.name,
+        activeSchool?.name ?? ''
+      );
+      triggerFileDownload(
+        createExcelBlob(bytes),
+        `danh-sach-hoc-sinh-lop-${slug}.xlsx`
+      );
+    } else {
+      const csv = formatStudentsToCsv(
+        rowsToExport,
+        activeClass.name,
+        activeSchool?.name ?? ''
+      );
+      triggerFileDownload(
+        new Blob([csv], { type: 'text/csv;charset=utf-8' }),
+        `danh-sach-hoc-sinh-lop-${slug}.csv`
+      );
+    }
+    setShowStudentExportModal(false);
+    onNotify(
+      `Đã xuất ${rowsToExport.length} học sinh ra định dạng ${studentExportFormat.toUpperCase()}.`
+    );
   }
 
   async function handleResetPassword(student: StudentProfile) {
@@ -533,25 +914,53 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
           )}
 
           {activeSchool && !activeClass && (
-            <button
-              type="button"
-              onClick={openCreateClassModal}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <GraduationCap className="w-3.5 h-3.5" />
-              <span>Thêm Lớp học</span>
-            </button>
+            <>
+              <button
+                type="button"
+                disabled={schoolClasses.length === 0}
+                onClick={openClassExportModal}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Xuất DS lớp</span>
+              </button>
+              <button
+                type="button"
+                onClick={openClassImportModal}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Nhập DS lớp</span>
+              </button>
+              <button
+                type="button"
+                onClick={openCreateClassModal}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <GraduationCap className="w-3.5 h-3.5" />
+                <span>Thêm Lớp học</span>
+              </button>
+            </>
           )}
 
           {activeSchool && activeClass && (
             <>
               <button
                 type="button"
-                onClick={() => setShowCsvModal(true)}
+                disabled={classStudents.length === 0}
+                onClick={openStudentExportModal}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Xuất DS học sinh</span>
+              </button>
+              <button
+                type="button"
+                onClick={openStudentImportModal}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Upload className="w-3.5 h-3.5" />
-                <span>Nhập CSV</span>
+                <span>Nhập DS học sinh</span>
               </button>
               <button
                 type="button"
@@ -644,7 +1053,12 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
             )}
           </div>
 
-          {scopedSchools.length === 0 ? (
+          {loading ? (
+            <CardGridSkeleton
+              count={6}
+              ariaLabel="Đang tải danh sách trường học..."
+            />
+          ) : scopedSchools.length === 0 ? (
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center space-y-3">
               <p className="text-sm text-slate-500 dark:text-slate-400">
                 Hệ thống chưa có trường học nào.
@@ -834,19 +1248,34 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
             </div>
           )}
 
-          {schoolClasses.length === 0 ? (
+          {loading ? (
+            <CardGridSkeleton
+              count={6}
+              ariaLabel="Đang tải danh sách lớp học..."
+            />
+          ) : schoolClasses.length === 0 ? (
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center space-y-3">
               <p className="text-sm text-slate-500 dark:text-slate-400">
                 Trường {activeSchool.name} hiện chưa có lớp học nào.
               </p>
-              <button
-                type="button"
-                onClick={openCreateClassModal}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
-              >
-                <GraduationCap className="w-3.5 h-3.5" />
-                <span>Thêm Lớp học đầu tiên</span>
-              </button>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={openCreateClassModal}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
+                >
+                  <GraduationCap className="w-3.5 h-3.5" />
+                  <span>Thêm Lớp học đầu tiên</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={openClassImportModal}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Nhập DS lớp</span>
+                </button>
+              </div>
             </div>
           ) : filteredClasses.length === 0 ? (
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center space-y-2">
@@ -1028,129 +1457,143 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
                     <th className="py-3 pl-4 pr-5 text-right font-medium">Thao tác</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {filteredStudents.map((st) => {
-                    const defaultPw = normalizeVietnamesePassword(st.fullName);
-                    return (
-                      <tr
-                        key={st.id}
-                        className="h-11 hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
-                      >
-                        <td className="py-2.5 pl-5 pr-4 font-mono text-xs tabular-nums text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                          {st.studentCode}
-                        </td>
-                        <td className="py-2.5 pr-4 font-medium text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                          {st.fullName}
-                        </td>
-                        <td className="py-2.5 pr-4 text-xs whitespace-nowrap">
-                          {st.isCustomPassword ? (
-                            <span className="text-amber-700 dark:text-amber-400 font-medium">
-                              Đã tự đổi ({st.passwordHash})
-                            </span>
-                          ) : (
-                            <span className="font-mono text-slate-600 dark:text-slate-400">
-                              {defaultPw}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2.5 pr-4 whitespace-nowrap">
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => handleToggleBreakReady(st)}
-                            className={`text-xs font-medium hover:underline disabled:opacity-50 cursor-pointer whitespace-nowrap ${
-                              st.alwaysBreakReady
-                                ? 'text-emerald-700 dark:text-emerald-400'
-                                : 'text-slate-500 dark:text-slate-400'
-                            }`}
-                          >
-                            {st.alwaysBreakReady ? 'Luôn mở khóa' : 'Theo nhiệm vụ'}
-                          </button>
-                        </td>
-                        <td className="py-2.5 pl-4 pr-5 text-right whitespace-nowrap space-x-3">
-                          <button
-                            type="button"
-                            aria-label={`Sửa học sinh ${st.fullName}`}
-                            onClick={() => openEditStudentModal(st)}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
-                          >
-                            <Pencil className="w-3 h-3" />
-                            <span>Sửa</span>
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => handleResetPassword(st)}
-                            className="text-xs font-medium text-slate-600 dark:text-slate-300 hover:underline disabled:opacity-50 cursor-pointer"
-                          >
-                            Reset MK
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            aria-label={`Xóa học sinh ${st.fullName}`}
-                            onClick={() =>
-                              setConfirmAction({
-                                type: 'delete_student',
-                                student: st,
-                              })
-                            }
-                            className="text-xs font-medium text-red-600 dark:text-red-400 hover:underline disabled:opacity-50 cursor-pointer"
-                          >
-                            Xóa
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {filteredStudents.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={5}
-                        className="py-10 px-6 text-center text-sm text-slate-500 dark:text-slate-400 space-y-3"
-                      >
-                        <div>
-                          {classStudents.length === 0
-                            ? `Lớp ${activeClass.name} chưa có học sinh nào.`
-                            : 'Chưa có học sinh nào khớp bộ lọc hiện tại.'}
-                        </div>
-                        <div className="flex flex-wrap items-center justify-center gap-2">
-                          {classStudents.length === 0 ? (
-                            <>
-                              <button
-                                type="button"
-                                onClick={openCreateStudentModal}
-                                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
-                              >
-                                <UserPlus className="w-3.5 h-3.5" />
-                                <span>Thêm Học sinh</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setShowCsvModal(true)}
-                                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
-                              >
-                                <Upload className="w-3.5 h-3.5" />
-                                <span>Nhập CSV</span>
-                              </button>
-                            </>
-                          ) : (
+                {loading ? (
+                  <TableSkeletonRows
+                    rows={6}
+                    ariaLabel="Đang tải danh sách học sinh..."
+                    columns={[
+                      { variant: 'mono', widths: ['w-16', 'w-20'], cellClassName: 'py-2.5 pl-5 pr-4' },
+                      { variant: 'text', widths: ['w-36', 'w-44', 'w-32'], cellClassName: 'py-2.5 pr-4' },
+                      { variant: 'mono', widths: ['w-24', 'w-32', 'w-28'], cellClassName: 'py-2.5 pr-4' },
+                      { variant: 'text', widths: ['w-24', 'w-28'], cellClassName: 'py-2.5 pr-4' },
+                      { variant: 'actions', align: 'right', cellClassName: 'py-2.5 pl-4 pr-5 text-right' },
+                    ]}
+                  />
+                ) : (
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {filteredStudents.map((st) => {
+                      const defaultPw = normalizeVietnamesePassword(st.fullName);
+                      return (
+                        <tr
+                          key={st.id}
+                          className="h-11 hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
+                        >
+                          <td className="py-2.5 pl-5 pr-4 font-mono text-xs tabular-nums text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                            {st.studentCode}
+                          </td>
+                          <td className="py-2.5 pr-4 font-medium text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                            {st.fullName}
+                          </td>
+                          <td className="py-2.5 pr-4 text-xs whitespace-nowrap">
+                            {st.isCustomPassword ? (
+                              <span className="text-amber-700 dark:text-amber-400 font-medium">
+                                Đã tự đổi ({st.passwordHash})
+                              </span>
+                            ) : (
+                              <span className="font-mono text-slate-600 dark:text-slate-400">
+                                {defaultPw}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 pr-4 whitespace-nowrap">
                             <button
                               type="button"
-                              onClick={() => {
-                                setStudentSearch('');
-                                setStudentStatusFilter('all');
-                              }}
-                              className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                              disabled={busy}
+                              onClick={() => handleToggleBreakReady(st)}
+                              className={`text-xs font-medium hover:underline disabled:opacity-50 cursor-pointer whitespace-nowrap ${
+                                st.alwaysBreakReady
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : 'text-slate-500 dark:text-slate-400'
+                              }`}
                             >
-                              Đặt lại bộ lọc
+                              {st.alwaysBreakReady ? 'Luôn mở khóa' : 'Theo nhiệm vụ'}
                             </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
+                          </td>
+                          <td className="py-2.5 pl-4 pr-5 text-right whitespace-nowrap space-x-3">
+                            <button
+                              type="button"
+                              aria-label={`Sửa học sinh ${st.fullName}`}
+                              onClick={() => openEditStudentModal(st)}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              <span>Sửa</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleResetPassword(st)}
+                              className="text-xs font-medium text-slate-600 dark:text-slate-300 hover:underline disabled:opacity-50 cursor-pointer"
+                            >
+                              Reset MK
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              aria-label={`Xóa học sinh ${st.fullName}`}
+                              onClick={() =>
+                                setConfirmAction({
+                                  type: 'delete_student',
+                                  student: st,
+                                })
+                              }
+                              className="text-xs font-medium text-red-600 dark:text-red-400 hover:underline disabled:opacity-50 cursor-pointer"
+                            >
+                              Xóa
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {filteredStudents.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={5}
+                          className="py-10 px-6 text-center text-sm text-slate-500 dark:text-slate-400 space-y-3"
+                        >
+                          <div>
+                            {classStudents.length === 0
+                              ? `Lớp ${activeClass.name} chưa có học sinh nào.`
+                              : 'Chưa có học sinh nào khớp bộ lọc hiện tại.'}
+                          </div>
+                          <div className="flex flex-wrap items-center justify-center gap-2">
+                            {classStudents.length === 0 ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={openCreateStudentModal}
+                                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
+                                >
+                                  <UserPlus className="w-3.5 h-3.5" />
+                                  <span>Thêm Học sinh</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={openStudentImportModal}
+                                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                                >
+                                  <Upload className="w-3.5 h-3.5" />
+                                  <span>Nhập DS học sinh</span>
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStudentSearch('');
+                                  setStudentStatusFilter('all');
+                                }}
+                                className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                              >
+                                Đặt lại bộ lọc
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                )}
               </table>
             </div>
           </div>
@@ -1509,91 +1952,782 @@ export const SchoolsStudentsView: React.FC<SchoolsStudentsViewProps> = ({
         </div>
       )}
 
-      {/* Modal: Nhập CSV hàng loạt */}
-      {showCsvModal && (
+      {/* Modal: Nhập danh sách Lớp học (Excel / CSV) */}
+      {showClassImportModal && activeSchool && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-labelledby="modal-csv-title"
+          aria-labelledby="modal-class-import-title"
           className="fixed inset-0 z-50 bg-slate-950/55 flex items-center justify-center p-4"
-          onClick={() => !busy && setShowCsvModal(false)}
+          onClick={() => !busy && setShowClassImportModal(false)}
         >
           <div
-            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-xl overflow-hidden"
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-2xl max-h-[88vh] flex flex-col shadow-xl overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
-              <h3
-                id="modal-csv-title"
-                className="font-display text-base font-semibold text-slate-900 dark:text-white"
-              >
-                Nhập danh sách Học sinh từ CSV · Lớp {activeClass?.name}
-              </h3>
+              <div>
+                <h3
+                  id="modal-class-import-title"
+                  className="font-display text-base font-semibold text-slate-900 dark:text-white"
+                >
+                  Nhập danh sách Lớp học · {activeSchool.name}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Hỗ trợ tải tệp Excel (.xlsx/.xls), CSV (.csv) hoặc dán trực tiếp danh sách lớp.
+                </p>
+              </div>
               <button
                 type="button"
-                aria-label="Đóng hộp thoại nhập CSV"
+                aria-label="Đóng hộp thoại nhập danh sách lớp"
                 disabled={busy}
-                onClick={() => setShowCsvModal(false)}
+                onClick={() => setShowClassImportModal(false)}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
+
             <form
-              onSubmit={handleImportCsv}
+              onSubmit={handleImportClasses}
               className="p-6 space-y-4 overflow-y-auto"
             >
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Dán danh sách mỗi học sinh một dòng theo định dạng: Họ tên, Mã HS. Hệ thống tự động chuẩn hóa mật khẩu mặc định tiếng Việt không dấu.
-              </p>
-              <textarea
-                rows={5}
-                value={csvText}
-                onChange={(e) => setCsvText(e.target.value)}
-                aria-label="Nội dung CSV danh sách học sinh"
-                className="w-full p-3 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-600"
-              />
-              <div className="max-h-44 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-lg">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 dark:bg-slate-950 text-slate-500 border-b border-slate-200 dark:border-slate-800">
-                      <th className="py-2 px-3">Mã HS</th>
-                      <th className="py-2 px-3">Họ tên</th>
-                      <th className="py-2 px-3">Mật khẩu mặc định</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {parsedCsv.rows.map((r, i) => (
-                      <tr key={i}>
-                        <td className="py-1.5 px-3 font-mono">{r.studentCode}</td>
-                        <td className="py-1.5 px-3">{r.fullName}</td>
-                        <td className="py-1.5 px-3 font-mono text-blue-600 dark:text-blue-400">
-                          {r.defaultPassword}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div
+                  role="tablist"
+                  aria-label="Phương thức nhập danh sách lớp"
+                  className="inline-flex p-1 rounded-lg bg-slate-100 dark:bg-slate-800"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={classImportMode === 'file'}
+                    onClick={() => setClassImportMode('file')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                      classImportMode === 'file'
+                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    Tải tệp Excel / CSV
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={classImportMode === 'paste'}
+                    onClick={() => setClassImportMode('paste')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                      classImportMode === 'paste'
+                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    Dán văn bản CSV
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleDownloadClassSampleExcel}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>Tải file Excel mẫu</span>
+                </button>
               </div>
+
+              {classImportMode === 'file' ? (
+                <div className="space-y-3">
+                  <div
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      void handleSelectClassImportFile(e.dataTransfer.files?.[0]);
+                    }}
+                    className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl p-5 text-center space-y-2 bg-slate-50/60 dark:bg-slate-950/60"
+                  >
+                    <input
+                      ref={classFileInputRef}
+                      type="file"
+                      accept=".xlsx,.xls,.csv,.txt"
+                      aria-label="Chọn tệp Excel hoặc CSV danh sách lớp"
+                      onChange={(e) => {
+                        void handleSelectClassImportFile(e.target.files?.[0]);
+                        e.target.value = '';
+                      }}
+                      className="hidden"
+                    />
+                    <FileSpreadsheet className="w-7 h-7 mx-auto text-blue-600 dark:text-blue-400" />
+                    <div className="text-xs text-slate-600 dark:text-slate-300">
+                      {classImportFileName ? (
+                        <span>
+                          Đã chọn:{' '}
+                          <strong className="font-mono text-slate-900 dark:text-white">
+                            {classImportFileName}
+                          </strong>
+                        </span>
+                      ) : (
+                        'Kéo thả tệp .xlsx, .xls, .csv vào đây hoặc nhấn để chọn tệp'
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => classFileInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{classImportFileName ? 'Chọn tệp khác' : 'Chọn tệp từ máy'}</span>
+                    </button>
+                  </div>
+
+                  {classExcelWb && classExcelWb.sheetNames.length > 1 && (
+                    <div className="flex items-center gap-3">
+                      <label
+                        htmlFor="class-sheet-select"
+                        className="text-xs font-medium text-slate-700 dark:text-slate-300 whitespace-nowrap"
+                      >
+                        Sheet dữ liệu:
+                      </label>
+                      <select
+                        id="class-sheet-select"
+                        value={classExcelSheet}
+                        onChange={(e) => setClassExcelSheet(e.target.value)}
+                        className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                      >
+                        {classExcelWb.sheetNames.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {classFileError && (
+                    <p className="text-xs text-red-600 dark:text-red-400 font-medium">
+                      {classFileError}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Mỗi lớp một dòng theo định dạng: Tên lớp, Khối (VD: 6A3, Khối 6 hoặc chỉ nhập tên lớp để tự nhận khối).
+                  </p>
+                  <textarea
+                    rows={4}
+                    value={classPasteText}
+                    onChange={(e) => setClassPasteText(e.target.value)}
+                    aria-label="Nội dung CSV danh sách lớp học"
+                    className="w-full p-3 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  />
+                </div>
+              )}
+
+              {(parsedClassImport.errors.length > 0 ||
+                parsedClassImport.warnings.length > 0) && (
+                <div className="p-3 rounded-lg bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/70 text-xs space-y-1">
+                  {parsedClassImport.errors.map((err, i) => (
+                    <div key={`ce-${i}`} className="text-red-600 dark:text-red-400">
+                      {err}
+                    </div>
+                  ))}
+                  {parsedClassImport.warnings.map((w, i) => (
+                    <div key={`cw-${i}`} className="text-amber-700 dark:text-amber-300">
+                      {w}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {parsedClassImport.rows.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-400 tabular-nums">
+                    <span>
+                      Xem trước ({parsedClassImport.rows.length} dòng)
+                    </span>
+                    <span>
+                      <strong className="text-emerald-600 dark:text-emerald-400">
+                        {validNewClassRows.length} lớp mới
+                      </strong>
+                      {parsedClassImport.rows.length - validNewClassRows.length > 0 && (
+                        <>
+                          {' '}
+                          ·{' '}
+                          <strong className="text-amber-600 dark:text-amber-400">
+                            {parsedClassImport.rows.length - validNewClassRows.length} trùng tên
+                          </strong>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-lg">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-950 text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                          <th className="py-2 px-3">Tên lớp</th>
+                          <th className="py-2 px-3">Khối (chuẩn hóa)</th>
+                          <th className="py-2 px-3 text-right">Trạng thái</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {parsedClassImport.rows.map((r, i) => {
+                          const isDup = existingClassNamesSet.has(
+                            r.name.trim().toLowerCase()
+                          );
+                          return (
+                            <tr key={`${r.name}-${i}`}>
+                              <td className="py-1.5 px-3 font-mono font-semibold">
+                                {r.name}
+                              </td>
+                              <td className="py-1.5 px-3">{r.grade}</td>
+                              <td className="py-1.5 px-3 text-right whitespace-nowrap">
+                                {isDup ? (
+                                  <span className="text-amber-600 dark:text-amber-400 font-medium">
+                                    Đã tồn tại (bỏ qua)
+                                  </span>
+                                ) : (
+                                  <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                                    Hợp lệ
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 pt-1">
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => setShowCsvModal(false)}
+                  onClick={() => setShowClassImportModal(false)}
                   className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
                 >
                   Đóng
                 </button>
                 <button
                   type="submit"
-                  disabled={busy || parsedCsv.rows.length === 0}
+                  disabled={busy || validNewClassRows.length === 0}
                   className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
                 >
                   {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>Nhập {parsedCsv.rows.length} học sinh</span>
+                  <span>Nhập {validNewClassRows.length} lớp mới</span>
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Xuất danh sách Lớp học (Excel / CSV) */}
+      {showClassExportModal && activeSchool && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-class-export-title"
+          className="fixed inset-0 z-50 bg-slate-950/55 flex items-center justify-center p-4"
+          onClick={() => setShowClassExportModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-md shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+              <h3
+                id="modal-class-export-title"
+                className="font-display text-base font-semibold text-slate-900 dark:text-white"
+              >
+                Xuất danh sách Lớp học · {activeSchool.name}
+              </h3>
+              <button
+                type="button"
+                aria-label="Đóng hộp thoại xuất danh sách lớp"
+                onClick={() => setShowClassExportModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="space-y-2">
+                <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Phạm vi dữ liệu
+                </span>
+                <div className="space-y-1.5 text-xs">
+                  <label className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="class-export-scope"
+                      checked={classExportScope === 'all'}
+                      onChange={() => setClassExportScope('all')}
+                    />
+                    <span>
+                      Toàn bộ lớp của trường ({schoolClasses.length} lớp)
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="class-export-scope"
+                      checked={classExportScope === 'filtered'}
+                      onChange={() => setClassExportScope('filtered')}
+                    />
+                    <span>
+                      Theo bộ lọc hiện tại ({filteredClasses.length} lớp)
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Định dạng tệp
+                </span>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setClassExportFormat('xlsx')}
+                    className={`p-3 rounded-lg border text-left transition-colors cursor-pointer ${
+                      classExportFormat === 'xlsx'
+                        ? 'border-blue-600 bg-blue-50/70 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                        : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <div className="font-semibold">Excel (.xlsx)</div>
+                    <div className="text-[11px] opacity-80 mt-0.5">
+                      Kèm sheet Hướng dẫn & thống kê sĩ số
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setClassExportFormat('csv')}
+                    className={`p-3 rounded-lg border text-left transition-colors cursor-pointer ${
+                      classExportFormat === 'csv'
+                        ? 'border-blue-600 bg-blue-50/70 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                        : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <div className="font-semibold">CSV (.csv)</div>
+                    <div className="text-[11px] opacity-80 mt-0.5">
+                      UTF-8 BOM chuẩn tiếng Việt
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowClassExportModal(false)}
+                  className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportClasses}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Tải xuống {classExportFormat.toUpperCase()}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Nhập danh sách Học sinh (Excel / CSV) */}
+      {showStudentImportModal && activeClass && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-student-import-title"
+          className="fixed inset-0 z-50 bg-slate-950/55 flex items-center justify-center p-4"
+          onClick={() => !busy && setShowStudentImportModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-2xl max-h-[88vh] flex flex-col shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
+              <div>
+                <h3
+                  id="modal-student-import-title"
+                  className="font-display text-base font-semibold text-slate-900 dark:text-white"
+                >
+                  Nhập danh sách Học sinh · Lớp {activeClass.name}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Tải tệp Excel/CSV hoặc dán cột Họ và tên. Mã HS được tự đánh nối tiếp và Giải lao demo đặt mặc định.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Đóng hộp thoại nhập học sinh"
+                disabled={busy}
+                onClick={() => setShowStudentImportModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleImportStudents}
+              className="p-6 space-y-4 overflow-y-auto"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div
+                  role="tablist"
+                  aria-label="Phương thức nhập danh sách học sinh"
+                  className="inline-flex p-1 rounded-lg bg-slate-100 dark:bg-slate-800"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={studentImportMode === 'file'}
+                    onClick={() => setStudentImportMode('file')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                      studentImportMode === 'file'
+                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    Tải tệp Excel / CSV
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={studentImportMode === 'paste'}
+                    onClick={() => setStudentImportMode('paste')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                      studentImportMode === 'paste'
+                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    Dán văn bản CSV
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleDownloadStudentSampleExcel}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>Tải file Excel mẫu</span>
+                </button>
+              </div>
+
+              {studentImportMode === 'file' ? (
+                <div className="space-y-3">
+                  <div
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      void handleSelectStudentImportFile(
+                        e.dataTransfer.files?.[0]
+                      );
+                    }}
+                    className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl p-5 text-center space-y-2 bg-slate-50/60 dark:bg-slate-950/60"
+                  >
+                    <input
+                      ref={studentFileInputRef}
+                      type="file"
+                      accept=".xlsx,.xls,.csv,.txt"
+                      aria-label="Chọn tệp Excel hoặc CSV danh sách học sinh"
+                      onChange={(e) => {
+                        void handleSelectStudentImportFile(e.target.files?.[0]);
+                        e.target.value = '';
+                      }}
+                      className="hidden"
+                    />
+                    <FileSpreadsheet className="w-7 h-7 mx-auto text-blue-600 dark:text-blue-400" />
+                    <div className="text-xs text-slate-600 dark:text-slate-300">
+                      {studentImportFileName ? (
+                        <span>
+                          Đã chọn:{' '}
+                          <strong className="font-mono text-slate-900 dark:text-white">
+                            {studentImportFileName}
+                          </strong>
+                        </span>
+                      ) : (
+                        'Kéo thả tệp .xlsx, .xls, .csv vào đây hoặc nhấn để chọn tệp'
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => studentFileInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>
+                        {studentImportFileName ? 'Chọn tệp khác' : 'Chọn tệp từ máy'}
+                      </span>
+                    </button>
+                  </div>
+
+                  {studentExcelWb && studentExcelWb.sheetNames.length > 1 && (
+                    <div className="flex items-center gap-3">
+                      <label
+                        htmlFor="student-sheet-select"
+                        className="text-xs font-medium text-slate-700 dark:text-slate-300 whitespace-nowrap"
+                      >
+                        Sheet dữ liệu:
+                      </label>
+                      <select
+                        id="student-sheet-select"
+                        value={studentExcelSheet}
+                        onChange={(e) => setStudentExcelSheet(e.target.value)}
+                        className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                      >
+                        {studentExcelWb.sheetNames.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {studentFileError && (
+                    <p className="text-xs text-red-600 dark:text-red-400 font-medium">
+                      {studentFileError}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Chỉ cần dán danh sách Họ và tên (mỗi học sinh một dòng). Hệ thống tự đánh Mã HS nối tiếp (vd:{' '}
+                    <span className="font-mono">{activeClass.name}-01</span>), sinh mật khẩu không dấu và đặt Giải lao demo về mặc định.
+                  </p>
+                  <textarea
+                    rows={4}
+                    value={csvText}
+                    onChange={(e) => setCsvText(e.target.value)}
+                    aria-label="Nội dung CSV danh sách học sinh"
+                    className="w-full p-3 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  />
+                </div>
+              )}
+
+              {(parsedStudentImport.errors.length > 0 ||
+                parsedStudentImport.warnings.length > 0) && (
+                <div className="p-3 rounded-lg bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/70 text-xs space-y-1">
+                  {parsedStudentImport.errors.map((err, i) => (
+                    <div key={`se-${i}`} className="text-red-600 dark:text-red-400">
+                      {err}
+                    </div>
+                  ))}
+                  {parsedStudentImport.warnings.map((w, i) => (
+                    <div key={`sw-${i}`} className="text-amber-700 dark:text-amber-300">
+                      {w}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {parsedStudentImport.rows.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-400 tabular-nums">
+                    <span>
+                      Xem trước ({parsedStudentImport.rows.length} học sinh)
+                    </span>
+                    <span>
+                      <strong className="text-emerald-600 dark:text-emerald-400">
+                        {parsedStudentImport.rows.length} học sinh sẵn sàng nhập
+                      </strong>
+                    </span>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-lg">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-950 text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                          <th className="py-2 px-3">Mã HS (Tự sinh)</th>
+                          <th className="py-2 px-3">Họ và tên</th>
+                          <th className="py-2 px-3">Mật khẩu mặc định</th>
+                          <th className="py-2 px-3 text-right">Ghi chú</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {parsedStudentImport.rows.map((r, i) => {
+                          const hasSameName = existingStudentNamesSet.has(
+                            r.fullName.trim().toLowerCase()
+                          );
+                          return (
+                            <tr key={`${r.studentCode}-${i}`}>
+                              <td className="py-1.5 px-3 font-mono">{r.studentCode}</td>
+                              <td className="py-1.5 px-3">{r.fullName}</td>
+                              <td className="py-1.5 px-3 font-mono text-blue-600 dark:text-blue-400">
+                                {r.defaultPassword}
+                              </td>
+                              <td className="py-1.5 px-3 text-right whitespace-nowrap">
+                                {hasSameName ? (
+                                  <span className="text-amber-600 dark:text-amber-400 font-medium">
+                                    Trùng tên (vẫn nhập)
+                                  </span>
+                                ) : (
+                                  <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                                    Sẵn sàng
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setShowStudentImportModal(false)}
+                  className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Đóng
+                </button>
+                <button
+                  type="submit"
+                  disabled={busy || parsedStudentImport.rows.length === 0}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Nhập {parsedStudentImport.rows.length} học sinh</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Xuất danh sách Học sinh (Excel / CSV) */}
+      {showStudentExportModal && activeClass && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-student-export-title"
+          className="fixed inset-0 z-50 bg-slate-950/55 flex items-center justify-center p-4"
+          onClick={() => setShowStudentExportModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-md shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+              <h3
+                id="modal-student-export-title"
+                className="font-display text-base font-semibold text-slate-900 dark:text-white"
+              >
+                Xuất danh sách Học sinh · Lớp {activeClass.name}
+              </h3>
+              <button
+                type="button"
+                aria-label="Đóng hộp thoại xuất danh sách học sinh"
+                onClick={() => setShowStudentExportModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="space-y-2">
+                <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Phạm vi dữ liệu
+                </span>
+                <div className="space-y-1.5 text-xs">
+                  <label className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="student-export-scope"
+                      checked={studentExportScope === 'all'}
+                      onChange={() => setStudentExportScope('all')}
+                    />
+                    <span>
+                      Toàn bộ học sinh của lớp ({classStudents.length} học sinh)
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="student-export-scope"
+                      checked={studentExportScope === 'filtered'}
+                      onChange={() => setStudentExportScope('filtered')}
+                    />
+                    <span>
+                      Theo bộ lọc hiện tại ({filteredStudents.length} học sinh)
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Định dạng tệp
+                </span>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setStudentExportFormat('xlsx')}
+                    className={`p-3 rounded-lg border text-left transition-colors cursor-pointer ${
+                      studentExportFormat === 'xlsx'
+                        ? 'border-blue-600 bg-blue-50/70 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                        : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <div className="font-semibold">Excel (.xlsx)</div>
+                    <div className="text-[11px] opacity-80 mt-0.5">
+                      Đầy đủ Mã HS, MK hiện hành & Hướng dẫn
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStudentExportFormat('csv')}
+                    className={`p-3 rounded-lg border text-left transition-colors cursor-pointer ${
+                      studentExportFormat === 'csv'
+                        ? 'border-blue-600 bg-blue-50/70 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                        : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <div className="font-semibold">CSV (.csv)</div>
+                    <div className="text-[11px] opacity-80 mt-0.5">
+                      UTF-8 BOM mở chuẩn trên Excel
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowStudentExportModal(false)}
+                  className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportStudents}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Tải xuống {studentExportFormat.toUpperCase()}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

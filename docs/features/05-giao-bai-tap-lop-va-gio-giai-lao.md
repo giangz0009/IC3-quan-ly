@@ -1,7 +1,7 @@
 # Tính năng 05: Giao Bài tập Lớp & Mở khóa Giờ Giải lao
 
 **Trạng thái:** Đã hoàn thành  
-**Cập nhật lần cuối:** 2026-11-20
+**Cập nhật lần cuối:** 2026-11-24
 
 ---
 
@@ -11,9 +11,9 @@
 |---|---|---|
 | Frontend | `src/components/ClassTasksView.tsx` | Thẻ tóm tắt cấu hình đợt bài tập & danh sách nhiệm vụ, Modal Box Sửa Thông tin chung, Modal Box Thêm/Sửa Nhiệm vụ, bảng theo dõi tiến độ & trạng thái giải lao từng học sinh |
 | Logic thuần | `src/utils/ic3Rules.ts` | `calculateIC3Score()`, `evaluateTaskCompletion()`, `isStudentBreakUnlocked()`, `formatDuration()` |
-| Kiểm thử | `src/utils/ic3Rules.test.ts` | Unit test tính điểm 0–1000 & điều kiện mở khóa giải lao theo số lượt và điểm sàn |
+| Kiểm thử | `src/utils/ic3Rules.test.ts` & `src/utils/supabaseMappers.test.ts` | Unit test tính điểm 0–1000, điều kiện mở khóa giải lao theo số lượt/điểm sàn & mapper `class_task_configs` / `class_tasks` / `student_task_submissions` / `student_break_states` |
 | API Client | `src/utils/api.ts` | `saveClassTaskConfig()` |
-| Backend | `server.ts` | `PUT /api/class-tasks/:classId`, `POST /api/submissions` |
+| Backend | `server/app.ts` & `server/supabaseStore.ts` | `PUT /api/class-tasks/:classId`, `POST /api/submissions` (ghi trực tiếp xuống 4 bảng `class_task_configs`, `class_tasks`, `student_task_submissions`, `student_break_states` trên Supabase) |
 
 ---
 
@@ -62,12 +62,13 @@ Tab **Giao Bài tập Lớp** cho phép giáo viên thiết kế lộ trình bà
 
 ## 4. Hạn chế hiện tại & Hướng phát triển
 
-- Khi nhấn *"Lưu Cấu hình Lớp"*, dữ liệu chỉ mới lưu vào Local DB (`PUT /api/class-tasks/:classId`); để học sinh thấy trên Supabase cần sang tab **Kết nối Supabase** bấm *"Đồng bộ Dữ liệu lên Supabase"* (chưa đồng bộ live 2 chiều như Ngân hàng Câu hỏi).
 - Giao diện chưa có modal chỉnh sửa danh sách `questionIds` lẻ trực tiếp bên trong từng nhiệm vụ nếu không chọn từ Bộ đề có sẵn (mặc định khi nhấn *Thêm Nhiệm vụ* sẽ lấy Bộ đề đầu tiên hoặc 5 câu đầu).
+- Lưu cấu hình bài tập lớp (`PUT /api/class-tasks/:classId`) và nộp bài (`POST /api/submissions`) đã ghi **trực tiếp** xuống Supabase PostgreSQL qua `server/supabaseStore.ts`.
 
 ---
 
 ## 5. Nhật ký thay đổi
 
+- **2026-11-24 / 2026-11-23:** Chuyển `saveClassTaskConfigOnSupabase` và `createSubmissionOnSupabase` sang lưu trực tiếp trên 4 bảng Supabase qua `server/app.ts` + `server/supabaseStore.ts`.
 - **2026-11-21 (Modal Box Thêm/Sửa):** Chuyển phần chỉnh sửa Thông tin chung đợt bài tập và Thêm/Sửa từng Nhiệm vụ sang Modal Box đồng nhất, hiển thị thẻ tóm tắt gọn trên giao diện chính.
 - **2026-11-20:** Rà soát và tài liệu hóa chi tiết cấu hình nhiệm vụ lớp và logic mở khóa giờ giải lao.

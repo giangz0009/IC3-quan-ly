@@ -3,21 +3,29 @@ import assert from 'node:assert/strict';
 import {
   buildAdminTeachersSupabasePayload,
   buildHotspotTargetFromPoints,
+  buildQuestionBankExportPackage,
   buildQuestionBankSupabasePayload,
   buildReorderedPartUpdates,
   calculateIC3Score,
+  canBatchToggleKnowledgeParts,
   canDeleteOrDemoteMaster,
   collectHotspotStoragePathsToDelete,
   evaluateTaskCompletion,
   extractHotspotStoragePathFromUrl,
   extractImageFileFromClipboardData,
   filterClassesByGradeAndQuery,
+  filterKnowledgeCategoriesByReadiness,
+  filterKnowledgePartsByReadiness,
   filterSchools,
   filterStudentsByStatusAndQuery,
   filterTeachers,
+  formatClassesToCsv,
+  formatQuestionBankToCsv,
   formatQuestionOrderSummary,
+  formatStudentsToCsv,
   formatSubmissionsToCsv,
   formatSupabaseLoadingStatus,
+  generateNextStudentCode,
   getDefaultInstructionForQuestionType,
   getHotspotTargetCenter,
   getNextTopicOrder,
@@ -26,21 +34,32 @@ import {
   getTeacherPermissionDetails,
   getTeacherPermissions,
   gradeQuestion,
+  isKnowledgeCategoryEnabled,
+  isKnowledgePartEnabled,
   isPassingIC3Score,
   isSafeRemoteSupabaseUrl,
   isStudentBreakUnlocked,
   mapSupabaseRowToAdminTeacher,
+  mergeQuestionBankImport,
   mergeRemoteTeachersWithLocal,
   normalizeAdminRole,
+  normalizeSchoolClassGrade,
   normalizeTeacherStatus,
   normalizeVietnamesePassword,
+  parseClassesCsv,
+  parseClassesTabularRows,
+  parseQuestionBankImportInput,
   parseStudentsCsv,
+  parseStudentsTabularRows,
   pickQuestionsBySelectedIds,
   rankBattleParticipants,
   resolveToastVariant,
   shouldUploadHotspotFileOnSave,
+  shouldUploadQuestionImageOnSave,
   sliceQuestionsByOrderRange,
   summarizeClassStudentStats,
+  summarizeKnowledgeCategoryReadiness,
+  summarizeKnowledgePartReadiness,
   summarizeSchoolHierarchyStats,
   summarizeTeachersByRole,
   summarizeTeacherStatuses,
@@ -319,14 +338,23 @@ test('rankBattleParticipants sorts by score DESC then durationSeconds ASC and re
   );
 });
 
-test('parseStudentsCsv and formatSubmissionsToCsv handle Vietnamese data', () => {
-  const csv = 'Họ tên,Mã HS\nĐỗ Gia Huy,6A1-01\nLê Minh Anh,';
-  const parsed = parseStudentsCsv(csv, '6A1');
+test('parseStudentsCsv and formatSubmissionsToCsv handle Vietnamese data and auto-codes', () => {
+  assert.equal(generateNextStudentCode('6A1', []), '6A1-01');
+  assert.equal(
+    generateNextStudentCode('6A1', ['6A1-01', '6A1-05', 'DEMO-BREAK']),
+    '6A1-06'
+  );
+
+  const csv = 'Họ tên,Mã HS\nĐỗ Gia Huy,MANUAL-99\nLê Minh Anh,';
+  const parsed = parseStudentsCsv(csv, '6A1', ['6A1-05']);
   assert.equal(parsed.errors.length, 0);
   assert.equal(parsed.rows.length, 2);
+  assert.equal(parsed.rows[0].studentCode, '6A1-06');
   assert.equal(parsed.rows[0].defaultPassword, 'dogiahuy');
-  assert.equal(parsed.rows[1].studentCode, '6A1002');
+  assert.equal(parsed.rows[0].alwaysBreakReady, false);
+  assert.equal(parsed.rows[1].studentCode, '6A1-07');
   assert.equal(parsed.rows[1].defaultPassword, 'leminhanh');
+  assert.equal(parsed.rows[1].alwaysBreakReady, false);
 
   const out = formatSubmissionsToCsv([], [], []);
   assert.equal(out.startsWith('\uFEFF'), true);
@@ -1073,6 +1101,687 @@ test('Schools -> Classes -> Students hierarchy summary and filter helpers work a
   assert.equal(filterStudentsByStatusAndQuery(c1Students, 'custom_pw', '').length, 1);
   assert.equal(filterStudentsByStatusAndQuery(c1Students, 'break_ready', '').length, 1);
   assert.equal(filterStudentsByStatusAndQuery(c1Students, 'all', '6a1-01').length, 1);
+});
+
+test('Question Bank JSON/CSV export, RFC-4180 round-trip, simple CSV import, validation, and merge/replace work accurately', () => {
+  const sampleModules = [
+    {
+      id: 'mod_cf',
+      code: 'computing_fundamentals',
+      level: 'LV1',
+      title: 'Máy tính cơ bản',
+      description: 'Desc CF',
+      orderIndex: 1,
+    },
+    {
+      id: 'mod_ka',
+      code: 'key_applications',
+      level: 'LV2',
+      title: 'Ứng dụng chính',
+      description: 'Desc KA',
+      orderIndex: 2,
+    },
+  ];
+  const sampleCategories = [
+    {
+      id: 'cat_cf_gm',
+      module: 'computing_fundamentals',
+      code: 'GM',
+      title: 'Phần cứng',
+      description: '',
+      orderIndex: 1,
+      isEnabled: true,
+    },
+    {
+      id: 'cat_ka_word',
+      module: 'key_applications',
+      code: 'WORD',
+      title: 'Soạn thảo',
+      description: '',
+      orderIndex: 1,
+      isEnabled: true,
+    },
+  ];
+  const sampleParts = [
+    {
+      id: 'part_gm1',
+      module: 'computing_fundamentals',
+      level: 'LV1',
+      category: 'GM',
+      code: 'GM1',
+      title: 'Thiết bị lưu trữ',
+      description: '',
+      orderIndex: 1,
+      isEnabled: true,
+    },
+    {
+      id: 'part_word1',
+      module: 'key_applications',
+      level: 'LV2',
+      category: 'WORD',
+      code: 'WORD1',
+      title: 'Ribbon Word',
+      description: '',
+      orderIndex: 1,
+      isEnabled: true,
+    },
+  ];
+  const sampleQuestions: Question[] = [
+    {
+      id: 'q_exp_1',
+      module: 'computing_fundamentals',
+      level: 'LV1',
+      category: 'GM',
+      contentCode: 'GM1',
+      topicOrder: 1,
+      topic: 'Bộ nhớ',
+      type: 'matching',
+      prompt: 'Ghép cặp "A, B" đúng nhất:',
+      instruction: 'Chọn cặp tương ứng',
+      payload: {
+        matchingLeft: [{ id: 'l1', text: 'CPU' }],
+        matchingRight: [{ id: 'r1', text: 'Xử lý' }],
+        correctPairs: [{ leftId: 'l1', rightId: 'r1' }],
+      },
+      explanation: 'Dòng 1\nDòng 2',
+      createdAt: '2026-11-20T00:00:00.000Z',
+      updatedAt: '2026-11-20T00:00:00.000Z',
+    },
+    {
+      id: 'q_exp_2',
+      module: 'key_applications',
+      level: 'LV2',
+      category: 'WORD',
+      contentCode: 'WORD1',
+      topicOrder: 1,
+      topic: 'Word Ribbon',
+      type: 'hotspot',
+      prompt: 'Nhấn vào nút Bold trên thanh Ribbon',
+      payload: {
+        hotspotType: 'word_ribbon',
+        imageAlt: 'Word Ribbon',
+        hotspotTarget: { label: 'Bold', minX: 10, minY: 10, maxX: 20, maxY: 20 },
+      },
+      explanation: '',
+      createdAt: '2026-11-20T00:00:00.000Z',
+      updatedAt: '2026-11-20T00:00:00.000Z',
+    },
+  ];
+  const sampleSets = [
+    {
+      id: 'set_gm1',
+      title: 'Bộ đề GM1',
+      description: '',
+      level: 'LV1',
+      category: 'GM',
+      contentCode: 'GM1',
+      questionIds: ['q_exp_1'],
+      createdAt: '2026-11-20T00:00:00.000Z',
+      updatedAt: '2026-11-20T00:00:00.000Z',
+    },
+  ];
+
+  // Scoped export: module + category
+  const scoped = buildQuestionBankExportPackage(
+    {
+      modules: sampleModules,
+      knowledgeCategories: sampleCategories,
+      knowledgeParts: sampleParts,
+      questions: sampleQuestions,
+      questionSets: sampleSets,
+    },
+    { module: 'computing_fundamentals', category: 'GM', contentCode: 'GM1' }
+  );
+  assert.equal(scoped.format, 'ic3-question-bank-v1');
+  assert.equal(scoped.questions.length, 1);
+  assert.equal(scoped.questions[0].id, 'q_exp_1');
+  assert.equal(scoped.questionSets.length, 1);
+
+  // Scoped export: questionSetId
+  const bySet = buildQuestionBankExportPackage(
+    {
+      modules: sampleModules,
+      knowledgeCategories: sampleCategories,
+      knowledgeParts: sampleParts,
+      questions: sampleQuestions,
+      questionSets: sampleSets,
+    },
+    { questionSetId: 'set_gm1' }
+  );
+  assert.equal(bySet.questions.length, 1);
+  assert.equal(bySet.modules.length, 1);
+
+  // Full export -> CSV (BOM + quoted comma/newline preservation) -> re-import round-trip
+  const fullPkg = buildQuestionBankExportPackage({
+    modules: sampleModules,
+    knowledgeCategories: sampleCategories,
+    knowledgeParts: sampleParts,
+    questions: sampleQuestions,
+    questionSets: sampleSets,
+  });
+  const csvOut = formatQuestionBankToCsv(fullPkg.questions);
+  assert.equal(csvOut.startsWith('\uFEFF'), true);
+
+  const parsedCsv = parseQuestionBankImportInput(csvOut, 'export.csv');
+  assert.equal(parsedCsv.errors.length, 0);
+  assert.equal(parsedCsv.bundle.questions.length, 2);
+  assert.equal(parsedCsv.bundle.questions[0].prompt, 'Ghép cặp "A, B" đúng nhất:');
+  assert.equal(parsedCsv.bundle.questions[0].explanation, 'Dòng 1\nDòng 2');
+  assert.equal(parsedCsv.bundle.questions[1].type, 'hotspot');
+  assert.equal(parsedCsv.bundle.modules.length, 2);
+  assert.equal(parsedCsv.bundle.knowledgeParts.length, 2);
+
+  // Simplified CSV with `options` + `correctAnswer`
+  const simpleCsv = [
+    'module,level,category,contentCode,type,prompt,options,correctAnswer',
+    'ai_literacy,LV4,TH,TH1,single,"AI là viết tắt của từ nào?","Artificial Intelligence | Auto Input | Applied Internet",a',
+    'ai_literacy,LV4,TH,TH1,true_false,"Kiểm tra phát biểu","LLM sinh văn bản|ROM là RAM","Đúng|Sai"',
+  ].join('\n');
+  const parsedSimple = parseQuestionBankImportInput(simpleCsv, 'simple.csv');
+  assert.equal(parsedSimple.errors.length, 0);
+  assert.equal(parsedSimple.bundle.questions.length, 2);
+  assert.equal(parsedSimple.bundle.modules[0].code, 'ai_literacy');
+  assert.equal(parsedSimple.bundle.knowledgeParts[0].code, 'TH1');
+  assert.equal(gradeQuestion(parsedSimple.bundle.questions[0], 'a'), true);
+  assert.equal(
+    gradeQuestion(parsedSimple.bundle.questions[1], { s1: true, s2: false }),
+    true
+  );
+
+  // Validation error reporting
+  const invalidJson = parseQuestionBankImportInput('{broken', 'bad.json');
+  assert.equal(invalidJson.errors.length, 1);
+  const invalidRows = parseQuestionBankImportInput(
+    JSON.stringify([{ type: 'unknown_type', prompt: 'Hi' }])
+  );
+  assert.equal(invalidRows.errors.length, 1);
+
+  // Merge vs Replace mode
+  const merged = mergeQuestionBankImport(
+    {
+      modules: sampleModules,
+      knowledgeCategories: sampleCategories,
+      knowledgeParts: sampleParts,
+      questions: sampleQuestions,
+      questionSets: sampleSets,
+    },
+    parsedSimple.bundle,
+    'merge'
+  );
+  assert.equal(merged.questions.length, 4);
+  assert.equal(merged.modules.length, 3);
+  assert.equal(merged.questionSets.length, 1);
+
+  const replaced = mergeQuestionBankImport(
+    {
+      modules: sampleModules,
+      knowledgeCategories: sampleCategories,
+      knowledgeParts: sampleParts,
+      questions: sampleQuestions,
+      questionSets: sampleSets,
+    },
+    parsedSimple.bundle,
+    'replace'
+  );
+  assert.equal(replaced.questions.length, 2);
+  assert.equal(replaced.modules.length, 1);
+  assert.equal(replaced.questionSets.length, 0);
+});
+
+test('normalizeSchoolClassGrade, parseClassesCsv, and formatClassesToCsv work accurately', () => {
+  assert.equal(normalizeSchoolClassGrade('6'), 'Khối 6');
+  assert.equal(normalizeSchoolClassGrade('k7'), 'Khối 7');
+  assert.equal(normalizeSchoolClassGrade('khoi 8'), 'Khối 8');
+  assert.equal(normalizeSchoolClassGrade('', '9A2'), 'Khối 9');
+
+  const csv = '\uFEFFTên lớp,Khối\n6A1,6\n7A2,\n6a1,Khối 6';
+  const parsed = parseClassesCsv(csv);
+  assert.equal(parsed.errors.length, 0);
+  assert.equal(parsed.rows.length, 2);
+  assert.deepEqual(parsed.rows, [
+    { name: '6A1', grade: 'Khối 6' },
+    { name: '7A2', grade: 'Khối 7' },
+  ]);
+  assert.equal(parsed.warnings.length, 1);
+
+  const tabParsed = parseClassesTabularRows([
+    ['Lớp', 'Khối lớp'],
+    ['8B1', 'Khối 8'],
+  ]);
+  assert.deepEqual(tabParsed.rows, [{ name: '8B1', grade: 'Khối 8' }]);
+
+  const outCsv = formatClassesToCsv(
+    [
+      {
+        id: 'c1',
+        schoolId: 's1',
+        name: '6A1',
+        grade: 'Khối 6',
+        createdAt: '2026-11-24T00:00:00Z',
+      },
+    ],
+    [
+      {
+        id: 'st1',
+        classId: 'c1',
+        fullName: 'Đỗ Gia Huy',
+        studentCode: '6A1-01',
+        passwordHash: 'dogiahuy',
+        isCustomPassword: false,
+        alwaysBreakReady: true,
+        createdAt: '2026-11-24T00:00:00Z',
+      },
+    ],
+    'THCS Nguyễn Du'
+  );
+  assert.equal(outCsv.startsWith('\uFEFF'), true);
+  assert.equal(outCsv.includes('6A1,Khối 6,1,0,1,THCS Nguyễn Du'), true);
+});
+
+test('parseStudentsTabularRows and formatStudentsToCsv auto-generate sequential codes and default break flag to false', () => {
+  const parsed = parseStudentsTabularRows(
+    [
+      ['Mã HS', 'Họ và tên', 'Giải lao demo'],
+      ['CUSTOM-1', 'Nguyễn Văn An', 'Có'],
+      ['', 'Lê Thị Bình', 'Không'],
+    ],
+    '6A1',
+    ['6A1-05', 'DEMO-BREAK']
+  );
+  assert.equal(parsed.errors.length, 0);
+  assert.equal(parsed.warnings.length, 0);
+  assert.equal(parsed.rows.length, 2);
+  assert.deepEqual(parsed.rows[0], {
+    fullName: 'Nguyễn Văn An',
+    studentCode: '6A1-06',
+    defaultPassword: 'nguyenvanan',
+    alwaysBreakReady: false,
+  });
+  assert.deepEqual(parsed.rows[1], {
+    fullName: 'Lê Thị Bình',
+    studentCode: '6A1-07',
+    defaultPassword: 'lethibinh',
+    alwaysBreakReady: false,
+  });
+
+  const singleColParsed = parseStudentsTabularRows(
+    [['1', 'Trần Ngọc Hân'], ['2', 'Phạm Minh Tuấn']],
+    '6A1',
+    ['6A1-06']
+  );
+  assert.equal(singleColParsed.errors.length, 0);
+  assert.equal(singleColParsed.rows[0].studentCode, '6A1-07');
+  assert.equal(singleColParsed.rows[1].studentCode, '6A1-08');
+  assert.equal(singleColParsed.rows[0].alwaysBreakReady, false);
+
+  const csvOut = formatStudentsToCsv(
+    [
+      {
+        id: 'st1',
+        classId: 'c1',
+        fullName: 'Đỗ Gia Huy',
+        studentCode: '6A1-01',
+        passwordHash: 'custom123',
+        isCustomPassword: true,
+        alwaysBreakReady: true,
+        createdAt: '2026-11-24T00:00:00Z',
+      },
+    ],
+    '6A1',
+    'THCS Nguyễn Du'
+  );
+  assert.equal(csvOut.startsWith('\uFEFF'), true);
+  assert.equal(
+    csvOut.includes('6A1-01,Đỗ Gia Huy,custom123,Đã tự đổi,Có,6A1,THCS Nguyễn Du'),
+    true
+  );
+});
+
+test('gradeQuestion and instruction support matrix_choice including shared option reuse across slots', () => {
+  assert.ok(getDefaultInstructionForQuestionType('matrix_choice').includes('chỗ trống'));
+
+  const q: Question = {
+    id: 'q_matrix_bool',
+    module: 'living_online',
+    level: 'LV3',
+    category: 'GM',
+    contentCode: 'GM1',
+    topicOrder: 2,
+    topic: 'Toán tử Boolean',
+    type: 'matrix_choice',
+    prompt: 'Hoàn thành các câu sử dụng toán tử tìm kiếm:',
+    payload: {
+      templateText:
+        'Để _(1)_ kết quả tìm kiếm sử dụng _(2)_ với AND\nĐể _(3)_ kết quả tìm kiếm sử dụng _(4)_ với NOT',
+      options: [
+        { id: 'opt_expand', text: 'Mở rộng' },
+        { id: 'opt_narrow', text: 'Thu hẹp' },
+        { id: 'opt_combine', text: 'Kết hợp các thuật ngữ' },
+        { id: 'opt_exclude', text: 'Loại trừ' },
+      ],
+      slots: [
+        { id: 's1', label: '(1)', correctOptionId: 'opt_narrow' },
+        { id: 's2', label: '(2)', correctOptionId: 'opt_combine' },
+        { id: 's3', label: '(3)', correctOptionId: 'opt_narrow' },
+        { id: 's4', label: '(4)', correctOptionId: 'opt_exclude' },
+      ],
+    },
+    explanation: 'AND và NOT đều thu hẹp kết quả.',
+    createdAt: '2026-11-28T00:00:00Z',
+    updatedAt: '2026-11-28T00:00:00Z',
+  };
+
+  assert.equal(
+    gradeQuestion(q, {
+      s1: 'opt_narrow',
+      s2: 'opt_combine',
+      s3: 'opt_narrow',
+      s4: 'opt_exclude',
+    }),
+    true
+  );
+  assert.equal(
+    gradeQuestion(q, {
+      s1: 'opt_expand',
+      s2: 'opt_combine',
+      s3: 'opt_narrow',
+      s4: 'opt_exclude',
+    }),
+    false
+  );
+  assert.equal(
+    gradeQuestion(q, {
+      s1: 'opt_narrow',
+      s2: 'opt_combine',
+      s3: 'opt_narrow',
+    }),
+    false
+  );
+  assert.equal(gradeQuestion(q, ['opt_narrow']), false);
+});
+
+test('shouldUploadQuestionImageOnSave and Storage cleanup support optional illustration images on non-hotspot questions', () => {
+  assert.equal(
+    shouldUploadQuestionImageOnSave({
+      questionType: 'single',
+      hasPendingFile: true,
+      supabaseConfigured: true,
+      promptValid: true,
+    }),
+    true
+  );
+  assert.equal(
+    shouldUploadQuestionImageOnSave({
+      questionType: 'matrix_choice',
+      hasPendingFile: true,
+      supabaseConfigured: true,
+      promptValid: false,
+    }),
+    false
+  );
+  assert.equal(
+    shouldUploadQuestionImageOnSave({
+      questionType: 'hotspot',
+      hasPendingFile: true,
+      supabaseConfigured: true,
+      promptValid: true,
+      hotspotImageReady: true,
+      hotspotTargetReady: false,
+    }),
+    false
+  );
+
+  const oldUrl =
+    'https://demo.supabase.co/storage/v1/object/public/hotspot-images/illust-old.webp';
+  const newUrl =
+    'https://demo.supabase.co/storage/v1/object/public/hotspot-images/illust-new.webp';
+
+  assert.equal(getObsoleteHotspotStoragePath(oldUrl, undefined, []), 'illust-old.webp');
+  assert.equal(getObsoleteHotspotStoragePath(oldUrl, newUrl, []), 'illust-old.webp');
+
+  const singleWithImg: Question = {
+    id: 'q_img_1',
+    module: 'computing_fundamentals',
+    level: 'LV1',
+    category: 'GM',
+    contentCode: 'GM1',
+    topicOrder: 1,
+    topic: 'Phần cứng',
+    type: 'single',
+    prompt: 'Thiết bị trong hình là gì?',
+    payload: {
+      options: [
+        { id: 'a', text: 'Router' },
+        { id: 'b', text: 'Switch' },
+      ],
+      correctOptionId: 'a',
+      imageUrl: oldUrl,
+      imageAlt: 'Router Wi-Fi',
+    },
+    explanation: '',
+    createdAt: '2026-11-28T00:00:00Z',
+    updatedAt: '2026-11-28T00:00:00Z',
+  };
+  assert.deepEqual(
+    collectHotspotStoragePathsToDelete([singleWithImg], []),
+    ['illust-old.webp']
+  );
+});
+
+test('parseQuestionBankImportInput supports matrix_choice CSV/JSON and optional imageUrl column', () => {
+  const csv = [
+    'id,module,level,category,contentCode,topicOrder,topic,type,prompt,optionA,optionB,correctAnswer,imageUrl,imageAlt,payloadJson',
+    'q_mx_1,living_online,LV3,GM,GM1,3,Boolean,matrix_choice,Hoàn thành câu,,,,,,"' +
+      JSON.stringify({
+        templateText: 'Để _(1)_',
+        options: [
+          { id: 'o1', text: 'Mở rộng' },
+          { id: 'o2', text: 'Thu hẹp' },
+        ],
+        slots: [{ id: 's1', label: '(1)', correctOptionId: 'o2' }],
+      }).replace(/"/g, '""') +
+      '"',
+    'q_s_img,computing_fundamentals,LV1,GM,GM1,4,Phần cứng,single,Nhìn ảnh chọn đúng,SSD,HDD,A,https://example.com/ssd.png,Ổ cứng SSD,',
+  ].join('\n');
+
+  const parsed = parseQuestionBankImportInput(csv);
+  assert.equal(parsed.errors.length, 0);
+  assert.equal(parsed.bundle.questions.length, 2);
+  assert.equal(parsed.bundle.questions[0].type, 'matrix_choice');
+  assert.equal(
+    gradeQuestion(parsed.bundle.questions[0], { s1: 'o2' }),
+    true
+  );
+  assert.equal(parsed.bundle.questions[1].type, 'single');
+  const p2 = parsed.bundle.questions[1].payload;
+  assert.ok('imageUrl' in p2);
+  assert.equal(p2.imageUrl, 'https://example.com/ssd.png');
+  assert.equal(p2.imageAlt, 'Ổ cứng SSD');
+});
+
+test('knowledge category readiness helpers summarize, filter, and preserve is_enabled in payloads', () => {
+  const categories = [
+    {
+      id: 'cat_1',
+      module: 'computing_fundamentals',
+      code: 'GM',
+      title: 'Nhóm GM — Chuẩn GMetrix',
+      description: 'Chuẩn đề thi',
+      orderIndex: 1,
+      isEnabled: true,
+    },
+    {
+      id: 'cat_2',
+      module: 'computing_fundamentals',
+      code: 'OT',
+      title: 'Nhóm OT — Chuyên đề Ôn tập',
+      description: 'Đang biên soạn',
+      orderIndex: 2,
+      isEnabled: false,
+    },
+    {
+      id: 'cat_3',
+      module: 'computing_fundamentals',
+      code: 'TH',
+      title: 'Nhóm TH — Thực hành',
+      description: 'Mặc định mở',
+      orderIndex: 3,
+      isEnabled: true,
+    },
+  ];
+
+  assert.equal(isKnowledgeCategoryEnabled({ isEnabled: true }), true);
+  assert.equal(isKnowledgeCategoryEnabled({ isEnabled: undefined }), true);
+  assert.equal(isKnowledgeCategoryEnabled({ isEnabled: false }), false);
+
+  assert.deepEqual(summarizeKnowledgeCategoryReadiness(categories), {
+    total: 3,
+    enabledCount: 2,
+    disabledCount: 1,
+  });
+
+  assert.deepEqual(
+    filterKnowledgeCategoriesByReadiness(categories, 'enabled').map((c) => c.code),
+    ['GM', 'TH']
+  );
+  assert.deepEqual(
+    filterKnowledgeCategoriesByReadiness(categories, 'disabled').map((c) => c.code),
+    ['OT']
+  );
+  assert.deepEqual(
+    filterKnowledgeCategoriesByReadiness(categories, 'all', 'thực hành').map(
+      (c) => c.code
+    ),
+    ['TH']
+  );
+
+  const sbPayload = buildQuestionBankSupabasePayload({
+    knowledgeCategories: categories,
+    knowledgeParts: [],
+    questions: [],
+    questionSets: [],
+  });
+  assert.equal(sbPayload.categories.find((c) => c.code === 'GM')?.is_enabled, true);
+  assert.equal(sbPayload.categories.find((c) => c.code === 'OT')?.is_enabled, false);
+});
+
+test('knowledge part readiness helpers summarize, filter, and preserve is_enabled in payloads', () => {
+  const parts = [
+    {
+      id: 'part_ot1',
+      module: 'computing_fundamentals',
+      level: 'LV1',
+      category: 'OT',
+      code: 'OT1',
+      title: 'Phần OT1 — Thiết bị vào ra',
+      description: 'Đã mở luyện tập',
+      orderIndex: 1,
+      isEnabled: true,
+    },
+    {
+      id: 'part_ot2',
+      module: 'computing_fundamentals',
+      level: 'LV1',
+      category: 'OT',
+      code: 'OT2',
+      title: 'Phần OT2 — Mạng cơ bản',
+      description: 'Đang tạm tắt',
+      orderIndex: 2,
+      isEnabled: false,
+    },
+    {
+      id: 'part_ot3',
+      module: 'computing_fundamentals',
+      level: 'LV1',
+      category: 'OT',
+      code: 'OT3',
+      title: 'Phần OT3 — Bảo mật',
+      description: 'Mặc định mở',
+      orderIndex: 3,
+      isEnabled: true,
+    },
+  ];
+
+  assert.equal(isKnowledgePartEnabled({ isEnabled: true }), true);
+  assert.equal(isKnowledgePartEnabled({ isEnabled: undefined }), true);
+  assert.equal(isKnowledgePartEnabled({ isEnabled: false }), false);
+
+  assert.deepEqual(summarizeKnowledgePartReadiness(parts), {
+    total: 3,
+    enabledCount: 2,
+    disabledCount: 1,
+  });
+
+  assert.deepEqual(
+    filterKnowledgePartsByReadiness(parts, 'enabled').map((p) => p.code),
+    ['OT1', 'OT3']
+  );
+  assert.deepEqual(
+    filterKnowledgePartsByReadiness(parts, 'disabled').map((p) => p.code),
+    ['OT2']
+  );
+  assert.deepEqual(
+    filterKnowledgePartsByReadiness(parts, 'all', 'bảo mật').map((p) => p.code),
+    ['OT3']
+  );
+
+  const sbPayload = buildQuestionBankSupabasePayload({
+    knowledgeCategories: [],
+    knowledgeParts: parts,
+    questions: [],
+    questionSets: [],
+  });
+  assert.equal(sbPayload.parts.find((p) => p.code === 'OT1')?.is_enabled, true);
+  assert.equal(sbPayload.parts.find((p) => p.code === 'OT2')?.is_enabled, false);
+});
+
+test('canBatchToggleKnowledgeParts computes bulk enable/disable availability accurately', () => {
+  assert.deepEqual(canBatchToggleKnowledgeParts([]), {
+    canEnableAll: false,
+    canDisableAll: false,
+    partsToEnableCount: 0,
+    partsToDisableCount: 0,
+  });
+
+  assert.deepEqual(
+    canBatchToggleKnowledgeParts([
+      { isEnabled: true },
+      { isEnabled: undefined },
+    ]),
+    {
+      canEnableAll: false,
+      canDisableAll: true,
+      partsToEnableCount: 0,
+      partsToDisableCount: 2,
+    }
+  );
+
+  assert.deepEqual(
+    canBatchToggleKnowledgeParts([
+      { isEnabled: true },
+      { isEnabled: false },
+      { isEnabled: true },
+    ]),
+    {
+      canEnableAll: true,
+      canDisableAll: true,
+      partsToEnableCount: 1,
+      partsToDisableCount: 2,
+    }
+  );
+
+  assert.deepEqual(
+    canBatchToggleKnowledgeParts([
+      { isEnabled: false },
+      { isEnabled: false },
+    ]),
+    {
+      canEnableAll: true,
+      canDisableAll: false,
+      partsToEnableCount: 2,
+      partsToDisableCount: 0,
+    }
+  );
 });
 
 

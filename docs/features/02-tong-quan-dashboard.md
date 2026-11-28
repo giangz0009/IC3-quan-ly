@@ -1,7 +1,7 @@
 # Tính năng 02: Tổng quan Dashboard
 
 **Trạng thái:** Đã hoàn thành  
-**Cập nhật lần cuối:** 2026-11-20
+**Cập nhật lần cuối:** 2026-11-24
 
 ---
 
@@ -45,11 +45,12 @@ Tab **Tổng quan** là màn hình mặc định ngay sau khi đăng nhập, cun
 
 ## 4. Hạn chế hiện tại & Hướng phát triển
 
-- Chưa tự động kéo lượt nộp mới (`student_task_submissions`) và trạng thái giải lao (`student_break_states`) từ Supabase khi mở app; hiện chỉ tự kéo 5 bảng Ngân hàng Câu hỏi.
+- Số liệu hiển thị được nạp qua `GET /api/bootstrap` trực tiếp từ 17 bảng Supabase tại thời điểm mở/làm mới dữ liệu (bao gồm `student_task_submissions`, `student_break_states`, `battle_rooms`); chưa tự động đăng ký WebSocket realtime liên tục trên màn hình Tổng quan (cần nhấn làm mới hoặc chuyển tab để cập nhật lượt nộp mới nhất từ học sinh).
 
 ---
 
 ## 5. Nhật ký thay đổi
 
+- **2026-11-24:** Cập nhật tài liệu phản ánh dữ liệu Tổng quan được đọc trực tiếp từ 17 bảng Supabase qua `server/supabaseStore.ts` (`GET /api/bootstrap`).
 - **2026-11-21:** Cập nhật mô hình tổng quan liên trường thống nhất cho cả 3 cấp giáo viên (LV1, LV2, Master).
 - **2026-11-20:** Rà soát và tách tài liệu mô tả riêng cho tab Tổng quan Dashboard.

@@ -21,12 +21,15 @@ import type {
 import {
   calculateIC3Score,
   canDeleteOrDemoteMaster,
+  generateNextStudentCode,
   getDefaultInstructionForQuestionType,
   getNextTopicOrder,
   isSafeRemoteSupabaseUrl,
   isStudentBreakUnlocked,
+  mergeQuestionBankImport,
   mergeRemoteTeachersWithLocal,
   normalizeAdminRole,
+  normalizeSchoolClassGrade,
   normalizeTeacherStatus,
   normalizeVietnamesePassword,
   rankBattleParticipants,
@@ -49,8 +52,10 @@ import {
 import {
   SupabaseStoreError,
   type SupabaseSyncStatus,
+  batchCreateClassesOnSupabase,
   batchDeleteQuestionsOnSupabaseServer,
   batchCreateStudentsOnSupabase,
+  batchUpdatePartsReadinessOnSupabase,
   createBattleRoomOnSupabase,
   createCategoryOnSupabase,
   createClassOnSupabase,
@@ -1241,6 +1246,67 @@ export function createApp(): express.Express {
     })
   );
 
+  app.post(
+    '/api/classes/batch',
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const { schoolId, rows } = req.body ?? {};
+      if (!schoolId || !Array.isArray(rows) || rows.length === 0) {
+        return res
+          .status(400)
+          .json({ error: 'Danh sách nhập lớp học không hợp lệ.' });
+      }
+      const { client } = resolveSupabaseFromRequest(req);
+      if (client) {
+        const result = await batchCreateClassesOnSupabase(
+          client,
+          String(schoolId),
+          rows
+        );
+        return res.status(201).json(result);
+      }
+      const db = getLocalDb();
+      const schoolExists = db.schools.some((s) => s.id === schoolId);
+      if (!schoolExists) {
+        return res.status(404).json({ error: 'Trường học không tồn tại.' });
+      }
+
+      const existingNames = new Set(
+        db.classes
+          .filter((c) => c.schoolId === schoolId)
+          .map((c) => c.name.trim().toLowerCase())
+      );
+
+      const created: SchoolClass[] = [];
+      const skipped: string[] = [];
+
+      for (const row of rows) {
+        const name = String(row?.name ?? '').trim();
+        if (!name) continue;
+        const key = name.toLowerCase();
+        if (existingNames.has(key)) {
+          skipped.push(name);
+          continue;
+        }
+        existingNames.add(key);
+
+        const grade = normalizeSchoolClassGrade(String(row?.grade ?? ''), name);
+        const cls: SchoolClass = {
+          id: makeId('class'),
+          schoolId: String(schoolId),
+          name,
+          grade,
+          createdAt: new Date().toISOString(),
+        };
+        db.classes.push(cls);
+        created.push(cls);
+      }
+
+      saveLocalDb();
+      return res.status(201).json({ created, skipped });
+    })
+  );
+
   app.put(
     '/api/classes/:id',
     requireAuth,
@@ -1369,22 +1435,32 @@ export function createApp(): express.Express {
       const cls = db.classes.find((c) => c.id === classId);
       if (!cls) return res.status(404).json({ error: 'Lớp học không tồn tại.' });
 
+      const trackedCodes = db.students
+        .filter((s) => s.classId === classId)
+        .map((s) => s.studentCode.trim().toUpperCase())
+        .filter(Boolean);
+      const existingCodes = new Set(trackedCodes);
+
       const created: StudentProfile[] = [];
       const skipped: string[] = [];
 
       for (const row of rows) {
         const fullName = String(row.fullName ?? '').trim();
-        const studentCode = String(row.studentCode ?? '').trim().toUpperCase();
-        if (!fullName || !studentCode) continue;
+        if (!fullName) continue;
 
-        const exists = db.students.some(
-          (s) =>
-            s.classId === classId && s.studentCode.toUpperCase() === studentCode
-        );
-        if (exists) {
-          skipped.push(studentCode);
-          continue;
+        const explicitCode = String(row.studentCode ?? '').trim().toUpperCase();
+        let studentCode = explicitCode;
+        if (studentCode) {
+          if (existingCodes.has(studentCode)) {
+            skipped.push(studentCode);
+            continue;
+          }
+        } else {
+          studentCode = generateNextStudentCode(cls.name, trackedCodes);
         }
+
+        existingCodes.add(studentCode);
+        trackedCodes.push(studentCode);
 
         const student: StudentProfile = {
           id: makeId('st'),
@@ -1675,6 +1751,7 @@ export function createApp(): express.Express {
         title,
         description: String(body.description ?? '').trim(),
         orderIndex: siblings.length + 1,
+        isEnabled: typeof body.isEnabled === 'boolean' ? body.isEnabled : true,
       };
       db.knowledgeCategories.push(created);
       saveLocalDb();
@@ -1710,6 +1787,11 @@ export function createApp(): express.Express {
       cat.title = nextTitle;
       if (body.description !== undefined) {
         cat.description = String(body.description).trim();
+      }
+      if (typeof body.isEnabled === 'boolean') {
+        cat.isEnabled = body.isEnabled;
+      } else if (typeof cat.isEnabled !== 'boolean') {
+        cat.isEnabled = true;
       }
       saveLocalDb();
       return res.json(cat);
@@ -1795,6 +1877,7 @@ export function createApp(): express.Express {
         title: body.title.trim(),
         description: (body.description || '').trim(),
         orderIndex: siblings.length + 1,
+        isEnabled: typeof body.isEnabled === 'boolean' ? body.isEnabled : true,
       };
       db.knowledgeParts.push(created);
       saveLocalDb();
@@ -1831,6 +1914,11 @@ export function createApp(): express.Express {
       if (body.description !== undefined) {
         part.description = String(body.description).trim();
       }
+      if (typeof body.isEnabled === 'boolean') {
+        part.isEnabled = body.isEnabled;
+      } else if (typeof part.isEnabled !== 'boolean') {
+        part.isEnabled = true;
+      }
       saveLocalDb();
       return res.json(part);
     })
@@ -1864,6 +1952,128 @@ export function createApp(): express.Express {
       db.knowledgeParts = db.knowledgeParts.filter((p) => p.id !== part.id);
       saveLocalDb();
       return res.json({ ok: true });
+    })
+  );
+
+  app.post(
+    '/api/knowledge-parts/batch-readiness',
+    requireRoles('teacher_lv2', 'master'),
+    asyncHandler(async (req, res) => {
+      const body = (req.body ?? {}) as {
+        module?: unknown;
+        level?: unknown;
+        category?: unknown;
+        isEnabled?: unknown;
+        virtualParts?: Array<{
+          code?: unknown;
+          title?: unknown;
+          description?: unknown;
+        }>;
+      };
+      const modCode = typeof body.module === 'string' ? body.module.trim() : '';
+      const cleanCat =
+        typeof body.category === 'string' ? body.category.trim().toUpperCase() : '';
+      const cleanLevel =
+        typeof body.level === 'string' && body.level.trim()
+          ? body.level.trim().toUpperCase()
+          : '';
+      if (!modCode || !cleanCat || typeof body.isEnabled !== 'boolean') {
+        return res.status(400).json({
+          error:
+            'Thiếu thông tin Mô-đun, Nhóm kiến thức hoặc trạng thái bật/tắt (isEnabled).',
+        });
+      }
+
+      const virtualParts = Array.isArray(body.virtualParts)
+        ? body.virtualParts
+            .map((vp) => ({
+              code: typeof vp?.code === 'string' ? vp.code.trim().toUpperCase() : '',
+              title: typeof vp?.title === 'string' ? vp.title.trim() : undefined,
+              description:
+                typeof vp?.description === 'string' ? vp.description.trim() : undefined,
+            }))
+            .filter((vp) => Boolean(vp.code))
+        : [];
+
+      const { client } = resolveSupabaseFromRequest(req);
+      if (client) {
+        const result = await batchUpdatePartsReadinessOnSupabase(client, {
+          module: modCode,
+          level: cleanLevel || undefined,
+          category: cleanCat,
+          isEnabled: body.isEnabled,
+          virtualParts,
+        });
+        return res.json(result);
+      }
+
+      const db = getLocalDb();
+      const modMeta = db.modules.find((m) => m.code === modCode);
+      const resolvedLevel =
+        cleanLevel || modMeta?.level || modCode.toUpperCase();
+
+      const categoryParts = db.knowledgeParts.filter(
+        (p) =>
+          p.module === modCode && p.category.trim().toUpperCase() === cleanCat
+      );
+      const existingCodes = new Set(
+        categoryParts.map((p) => p.code.trim().toUpperCase())
+      );
+
+      // Materialize virtual parts passed in payload or implied by questions in local DB
+      for (const vp of virtualParts) {
+        if (existingCodes.has(vp.code)) continue;
+        existingCodes.add(vp.code);
+        const created: KnowledgePart = {
+          id: makeId('part'),
+          module: modCode,
+          level: resolvedLevel,
+          category: cleanCat,
+          code: vp.code,
+          title: vp.title || `Chuyên đề ${vp.code}`,
+          description: vp.description || '',
+          orderIndex: categoryParts.length + 1,
+          isEnabled: body.isEnabled,
+        };
+        db.knowledgeParts.push(created);
+        categoryParts.push(created);
+      }
+
+      for (const q of db.questions) {
+        if (
+          q.module !== modCode ||
+          q.category.trim().toUpperCase() !== cleanCat
+        ) {
+          continue;
+        }
+        const code = (q.contentCode || `${cleanCat}1`).trim().toUpperCase();
+        if (!code || existingCodes.has(code)) continue;
+        existingCodes.add(code);
+        const created: KnowledgePart = {
+          id: makeId('part'),
+          module: modCode,
+          level: q.level || resolvedLevel,
+          category: cleanCat,
+          code,
+          title: q.topic?.trim() || `Chuyên đề ${code}`,
+          description: '',
+          orderIndex: categoryParts.length + 1,
+          isEnabled: body.isEnabled,
+        };
+        db.knowledgeParts.push(created);
+        categoryParts.push(created);
+      }
+
+      for (const part of categoryParts) {
+        part.isEnabled = body.isEnabled;
+      }
+      saveLocalDb();
+      return res.json({
+        ok: true,
+        updatedCount: categoryParts.length,
+        isEnabled: body.isEnabled,
+        parts: categoryParts,
+      });
     })
   );
 
@@ -1903,6 +2113,7 @@ export function createApp(): express.Express {
         title: `Nhóm ${cleanCat}`,
         description: '',
         orderIndex: siblings.length + 1,
+        isEnabled: true,
       });
     }
     if (
@@ -1926,6 +2137,7 @@ export function createApp(): express.Express {
         title: topic.trim() || `Chuyên đề ${cleanPart}`,
         description: '',
         orderIndex: siblings.length + 1,
+        isEnabled: true,
       });
     }
   }
@@ -2269,42 +2481,77 @@ export function createApp(): express.Express {
         knowledgeParts,
         questions,
         questionSets,
+        mode,
       } = req.body as {
         modules?: IC3ModuleRecord[];
         knowledgeCategories?: KnowledgeCategoryRecord[];
         knowledgeParts?: KnowledgePart[];
         questions?: Question[];
         questionSets?: QuestionSet[];
+        mode?: 'merge' | 'replace';
       };
       if (!Array.isArray(questions)) {
         return res
           .status(400)
           .json({ error: 'Danh sách câu hỏi không hợp lệ.' });
       }
+      const effectiveMode: 'merge' | 'replace' =
+        mode === 'merge' ? 'merge' : 'replace';
       const { client } = resolveSupabaseFromRequest(req);
       if (client) {
-        const counts = await importQuestionBankToSupabase(client, {
-          modules,
-          knowledgeCategories,
-          knowledgeParts,
-          questions,
-          questionSets,
-        });
+        const counts = await importQuestionBankToSupabase(
+          client,
+          {
+            modules,
+            knowledgeCategories,
+            knowledgeParts,
+            questions,
+            questionSets,
+          },
+          effectiveMode
+        );
         return res.json({ ok: true, counts });
       }
       const db = getLocalDb();
-      if (Array.isArray(modules) && modules.length > 0) {
-        db.modules = modules;
-      }
-      if (Array.isArray(knowledgeCategories) && knowledgeCategories.length > 0) {
-        db.knowledgeCategories = knowledgeCategories;
-      }
-      if (Array.isArray(knowledgeParts)) {
-        db.knowledgeParts = knowledgeParts;
-      }
-      db.questions = questions;
-      if (Array.isArray(questionSets)) {
-        db.questionSets = questionSets;
+      if (effectiveMode === 'merge') {
+        const merged = mergeQuestionBankImport(
+          {
+            modules: db.modules,
+            knowledgeCategories: db.knowledgeCategories,
+            knowledgeParts: db.knowledgeParts,
+            questions: db.questions,
+            questionSets: db.questionSets,
+          },
+          {
+            modules: Array.isArray(modules) ? modules : [],
+            knowledgeCategories: Array.isArray(knowledgeCategories)
+              ? knowledgeCategories
+              : [],
+            knowledgeParts: Array.isArray(knowledgeParts) ? knowledgeParts : [],
+            questions,
+            questionSets: Array.isArray(questionSets) ? questionSets : [],
+          },
+          'merge'
+        );
+        db.modules = merged.modules;
+        db.knowledgeCategories = merged.knowledgeCategories;
+        db.knowledgeParts = merged.knowledgeParts;
+        db.questions = merged.questions;
+        db.questionSets = merged.questionSets;
+      } else {
+        if (Array.isArray(modules) && modules.length > 0) {
+          db.modules = modules;
+        }
+        if (Array.isArray(knowledgeCategories) && knowledgeCategories.length > 0) {
+          db.knowledgeCategories = knowledgeCategories;
+        }
+        if (Array.isArray(knowledgeParts)) {
+          db.knowledgeParts = knowledgeParts;
+        }
+        db.questions = questions;
+        if (Array.isArray(questionSets)) {
+          db.questionSets = questionSets;
+        }
       }
       saveLocalDb();
       return res.json({

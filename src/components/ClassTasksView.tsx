@@ -23,10 +23,12 @@ import {
   formatDuration,
   isStudentBreakUnlocked,
 } from '../utils/ic3Rules';
+import { ListSkeleton, TableSkeletonRows } from './TableSkeleton';
 
 interface ClassTasksViewProps {
   db: Omit<AdminDatabase, 'teachers'>;
   currentTeacher: SafeTeacher;
+  loading?: boolean;
   onRefresh: () => Promise<void>;
   onNotify: (msg: string, isError?: boolean) => void;
 }
@@ -34,6 +36,7 @@ interface ClassTasksViewProps {
 export const ClassTasksView: React.FC<ClassTasksViewProps> = ({
   db,
   currentTeacher,
+  loading = false,
   onRefresh,
   onNotify,
 }) => {
@@ -335,97 +338,107 @@ export const ClassTasksView: React.FC<ClassTasksViewProps> = ({
           Danh sách Nhiệm vụ của Lớp ({draft.tasks.length})
         </h2>
 
-        <div className="space-y-3">
-          {draft.tasks.map((task, idx) => (
-            <article
-              key={task.id}
-              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-wrap items-start justify-between gap-4"
-            >
-              <div className="space-y-1.5 max-w-3xl">
-                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-                  <span className="font-bold text-blue-600 dark:text-blue-400">
-                    Nhiệm vụ #{idx + 1}
-                  </span>
-                  <span>·</span>
-                  <span>
-                    {task.level} · {task.category} · {task.contentCode}
-                  </span>
-                  <span>·</span>
-                  <span>
-                    {task.quizMode === 'exam' ? 'Thi thử (Exam)' : 'Luyện tập (Practice)'}
-                  </span>
-                  <span>·</span>
-                  <span>{task.questionIds.length} câu hỏi</span>
-                </div>
-                <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
-                  {task.title}
-                </h3>
-                {task.description && (
-                  <p className="text-xs text-slate-600 dark:text-slate-400">
-                    {task.description}
-                  </p>
-                )}
-                <div className="text-xs text-slate-500 dark:text-slate-400 pt-1 tabular-nums">
-                  Điểm sàn:{' '}
-                  <strong className="text-slate-700 dark:text-slate-200 font-mono">
-                    {task.minScore}/1000
-                  </strong>{' '}
-                  · Số lượt yêu cầu:{' '}
-                  <strong className="text-slate-700 dark:text-slate-200 font-mono">
-                    {task.requiredAttempts}
-                  </strong>{' '}
-                  · Thời lượng dự kiến:{' '}
-                  <strong className="text-slate-700 dark:text-slate-200 font-mono">
-                    {task.estimatedMinutes} phút
-                  </strong>
-                </div>
-              </div>
+        {loading ? (
+          <ListSkeleton
+            variant="questionCard"
+            rows={3}
+            ariaLabel="Đang tải danh sách nhiệm vụ của lớp..."
+          />
+        ) : (
+          <>
+            <div className="space-y-3">
+              {draft.tasks.map((task, idx) => (
+                <article
+                  key={task.id}
+                  className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-wrap items-start justify-between gap-4"
+                >
+                  <div className="space-y-1.5 max-w-3xl">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+                      <span className="font-bold text-blue-600 dark:text-blue-400">
+                        Nhiệm vụ #{idx + 1}
+                      </span>
+                      <span>·</span>
+                      <span>
+                        {task.level} · {task.category} · {task.contentCode}
+                      </span>
+                      <span>·</span>
+                      <span>
+                        {task.quizMode === 'exam' ? 'Thi thử (Exam)' : 'Luyện tập (Practice)'}
+                      </span>
+                      <span>·</span>
+                      <span>{task.questionIds.length} câu hỏi</span>
+                    </div>
+                    <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
+                      {task.title}
+                    </h3>
+                    {task.description && (
+                      <p className="text-xs text-slate-600 dark:text-slate-400">
+                        {task.description}
+                      </p>
+                    )}
+                    <div className="text-xs text-slate-500 dark:text-slate-400 pt-1 tabular-nums">
+                      Điểm sàn:{' '}
+                      <strong className="text-slate-700 dark:text-slate-200 font-mono">
+                        {task.minScore}/1000
+                      </strong>{' '}
+                      · Số lượt yêu cầu:{' '}
+                      <strong className="text-slate-700 dark:text-slate-200 font-mono">
+                        {task.requiredAttempts}
+                      </strong>{' '}
+                      · Thời lượng dự kiến:{' '}
+                      <strong className="text-slate-700 dark:text-slate-200 font-mono">
+                        {task.estimatedMinutes} phút
+                      </strong>
+                    </div>
+                  </div>
 
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  type="button"
-                  aria-label={`Di chuyển nhiệm vụ ${idx + 1} lên`}
-                  disabled={idx === 0}
-                  onClick={() => moveTask(idx, -1)}
-                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
-                >
-                  <ArrowUp className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Di chuyển nhiệm vụ ${idx + 1} xuống`}
-                  disabled={idx === draft.tasks.length - 1}
-                  onClick={() => moveTask(idx, 1)}
-                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
-                >
-                  <ArrowDown className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Sửa nhiệm vụ ${idx + 1}`}
-                  onClick={() => openEditTaskModal(idx)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                  <span>Sửa</span>
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Xóa nhiệm vụ ${idx + 1}`}
-                  onClick={() => removeTask(idx)}
-                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 cursor-pointer"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      aria-label={`Di chuyển nhiệm vụ ${idx + 1} lên`}
+                      disabled={idx === 0}
+                      onClick={() => moveTask(idx, -1)}
+                      className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      <ArrowUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Di chuyển nhiệm vụ ${idx + 1} xuống`}
+                      disabled={idx === draft.tasks.length - 1}
+                      onClick={() => moveTask(idx, 1)}
+                      className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Sửa nhiệm vụ ${idx + 1}`}
+                      onClick={() => openEditTaskModal(idx)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      <span>Sửa</span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Xóa nhiệm vụ ${idx + 1}`}
+                      onClick={() => removeTask(idx)}
+                      className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
 
-        {draft.tasks.length === 0 && (
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-8 text-center text-sm text-slate-500 dark:text-slate-400">
-            Lớp này chưa có nhiệm vụ nào. Nhấn "Thêm Nhiệm vụ" để giao bài tập.
-          </div>
+            {draft.tasks.length === 0 && (
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                Lớp này chưa có nhiệm vụ nào. Nhấn "Thêm Nhiệm vụ" để giao bài tập.
+              </div>
+            )}
+          </>
         )}
       </section>
 
@@ -451,52 +464,66 @@ export const ClassTasksView: React.FC<ClassTasksViewProps> = ({
                 <th className="py-2 font-medium text-right">Khu vực Giải lao</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {classStudents.map((st) => {
-                const completedTasks = draft.tasks.filter(
-                  (t) => evaluateTaskCompletion(db.submissions, st.id, t).completed
-                ).length;
-                const unlocked =
-                  st.alwaysBreakReady ||
-                  isStudentBreakUnlocked(draft.tasks, db.submissions, st.id);
-                const breakState = db.breakStates.find(
-                  (b) => b.studentId === st.id
-                );
-                const bestScore = db.submissions
-                  .filter((s) => s.studentId === st.id)
-                  .reduce((max, s) => Math.max(max, s.score), 0);
+            {loading ? (
+              <TableSkeletonRows
+                rows={6}
+                ariaLabel="Đang tải tiến độ hoàn thành nhiệm vụ của học sinh..."
+                columns={[
+                  { variant: 'mono', widths: ['w-16', 'w-20'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'text', widths: ['w-36', 'w-44', 'w-32'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'mono', widths: ['w-24', 'w-28'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'mono', widths: ['w-16', 'w-20'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'text', align: 'right', widths: ['w-24', 'w-28'], cellClassName: 'py-2 text-right' },
+                ]}
+              />
+            ) : (
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {classStudents.map((st) => {
+                  const completedTasks = draft.tasks.filter(
+                    (t) => evaluateTaskCompletion(db.submissions, st.id, t).completed
+                  ).length;
+                  const unlocked =
+                    st.alwaysBreakReady ||
+                    isStudentBreakUnlocked(draft.tasks, db.submissions, st.id);
+                  const breakState = db.breakStates.find(
+                    (b) => b.studentId === st.id
+                  );
+                  const bestScore = db.submissions
+                    .filter((s) => s.studentId === st.id)
+                    .reduce((max, s) => Math.max(max, s.score), 0);
 
-                return (
-                  <tr key={st.id} className="h-11">
-                    <td className="py-2 pr-4 font-mono text-xs text-slate-500">
-                      {st.studentCode}
-                    </td>
-                    <td className="py-2 pr-4 font-medium">{st.fullName}</td>
-                    <td className="py-2 pr-4 font-mono text-xs tabular-nums">
-                      {completedTasks}/{draft.tasks.length} nhiệm vụ
-                    </td>
-                    <td className="py-2 pr-4 font-mono text-xs tabular-nums">
-                      {bestScore > 0 ? `${bestScore}/1000` : '—'}
-                    </td>
-                    <td className="py-2 text-right text-xs">
-                      {st.alwaysBreakReady ? (
-                        <span className="text-emerald-700 dark:text-emerald-400 font-medium">
-                          Luôn mở (Demo)
-                        </span>
-                      ) : unlocked ? (
-                        <span className="text-emerald-700 dark:text-emerald-400 font-medium tabular-nums">
-                          Đang mở ({formatDuration(breakState?.remainingSeconds ?? draft.breakRewardMinutes * 60)})
-                        </span>
-                      ) : (
-                        <span className="text-slate-500 dark:text-slate-400">
-                          Đang khóa
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
+                  return (
+                    <tr key={st.id} className="h-11">
+                      <td className="py-2 pr-4 font-mono text-xs text-slate-500">
+                        {st.studentCode}
+                      </td>
+                      <td className="py-2 pr-4 font-medium">{st.fullName}</td>
+                      <td className="py-2 pr-4 font-mono text-xs tabular-nums">
+                        {completedTasks}/{draft.tasks.length} nhiệm vụ
+                      </td>
+                      <td className="py-2 pr-4 font-mono text-xs tabular-nums">
+                        {bestScore > 0 ? `${bestScore}/1000` : '—'}
+                      </td>
+                      <td className="py-2 text-right text-xs">
+                        {st.alwaysBreakReady ? (
+                          <span className="text-emerald-700 dark:text-emerald-400 font-medium">
+                            Luôn mở (Demo)
+                          </span>
+                        ) : unlocked ? (
+                          <span className="text-emerald-700 dark:text-emerald-400 font-medium tabular-nums">
+                            Đang mở ({formatDuration(breakState?.remainingSeconds ?? draft.breakRewardMinutes * 60)})
+                          </span>
+                        ) : (
+                          <span className="text-slate-500 dark:text-slate-400">
+                            Đang khóa
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            )}
           </table>
         </div>
       </section>

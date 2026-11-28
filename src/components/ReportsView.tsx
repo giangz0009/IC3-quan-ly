@@ -2,15 +2,18 @@ import React, { useMemo, useState } from 'react';
 import { Download } from 'lucide-react';
 import type { AdminDatabase } from '../types/ic3';
 import { formatDuration, formatSubmissionsToCsv } from '../utils/ic3Rules';
+import { ListSkeleton, TableSkeletonRows } from './TableSkeleton';
 
 interface ReportsViewProps {
   db: Omit<AdminDatabase, 'teachers'>;
   scopedSchoolId: string | null;
+  loading?: boolean;
 }
 
 export const ReportsView: React.FC<ReportsViewProps> = ({
   db,
   scopedSchoolId,
+  loading = false,
 }) => {
   const visibleClasses = useMemo(
     () =>
@@ -180,44 +183,61 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 <th className="py-2 font-medium text-right">Thời gian TB</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {studentSummary.map((row) => (
-                <tr key={row.studentId} className="h-11">
-                  <td className="py-2 pr-4 font-mono text-xs text-slate-500">
-                    {row.studentCode}
-                  </td>
-                  <td className="py-2 pr-4 font-medium">{row.studentName}</td>
-                  <td className="py-2 pr-4 text-xs text-slate-600 dark:text-slate-400">
-                    {row.className}
-                  </td>
-                  <td className="py-2 pr-4 font-mono text-xs tabular-nums text-right">
-                    {row.attempts}
-                  </td>
-                  <td className="py-2 pr-4 font-mono text-xs tabular-nums text-right">
-                    {row.qualifying}/{row.attempts}
-                  </td>
-                  <td className="py-2 pr-4 font-mono font-semibold tabular-nums text-right text-blue-600 dark:text-blue-400">
-                    {row.bestScore}
-                  </td>
-                  <td className="py-2 pr-4 font-mono tabular-nums text-right">
-                    {Math.round(row.totalScore / row.attempts)}
-                  </td>
-                  <td className="py-2 font-mono text-xs tabular-nums text-right text-slate-500">
-                    {formatDuration(Math.round(row.totalDuration / row.attempts))}
-                  </td>
-                </tr>
-              ))}
-              {studentSummary.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={8}
-                    className="py-8 text-center text-sm text-slate-500"
-                  >
-                    Chưa có dữ liệu thống kê phù hợp.
-                  </td>
-                </tr>
-              )}
-            </tbody>
+            {loading ? (
+              <TableSkeletonRows
+                rows={6}
+                ariaLabel="Đang tải bảng tổng hợp thành tích học sinh..."
+                columns={[
+                  { variant: 'mono', widths: ['w-16', 'w-20'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'text', widths: ['w-32', 'w-40', 'w-36'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'text', widths: ['w-14', 'w-16'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'mono', align: 'right', widths: ['w-8', 'w-10'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'mono', align: 'right', widths: ['w-10', 'w-12'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'mono', align: 'right', widths: ['w-10', 'w-12'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'mono', align: 'right', widths: ['w-10', 'w-12'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'mono', align: 'right', widths: ['w-14', 'w-16'], cellClassName: 'py-2' },
+                ]}
+              />
+            ) : (
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {studentSummary.map((row) => (
+                  <tr key={row.studentId} className="h-11">
+                    <td className="py-2 pr-4 font-mono text-xs text-slate-500">
+                      {row.studentCode}
+                    </td>
+                    <td className="py-2 pr-4 font-medium">{row.studentName}</td>
+                    <td className="py-2 pr-4 text-xs text-slate-600 dark:text-slate-400">
+                      {row.className}
+                    </td>
+                    <td className="py-2 pr-4 font-mono text-xs tabular-nums text-right">
+                      {row.attempts}
+                    </td>
+                    <td className="py-2 pr-4 font-mono text-xs tabular-nums text-right">
+                      {row.qualifying}/{row.attempts}
+                    </td>
+                    <td className="py-2 pr-4 font-mono font-semibold tabular-nums text-right text-blue-600 dark:text-blue-400">
+                      {row.bestScore}
+                    </td>
+                    <td className="py-2 pr-4 font-mono tabular-nums text-right">
+                      {Math.round(row.totalScore / row.attempts)}
+                    </td>
+                    <td className="py-2 font-mono text-xs tabular-nums text-right text-slate-500">
+                      {formatDuration(Math.round(row.totalDuration / row.attempts))}
+                    </td>
+                  </tr>
+                ))}
+                {studentSummary.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={8}
+                      className="py-8 text-center text-sm text-slate-500"
+                    >
+                      Chưa có dữ liệu thống kê phù hợp.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            )}
           </table>
         </div>
       </section>
@@ -240,44 +260,72 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 <th className="py-2 font-medium text-right">Kết quả</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {filteredSubmissions.map((s) => (
-                <tr key={s.id} className="h-10">
-                  <td className="py-2 pr-4">
-                    <span className="font-medium">{s.studentName}</span>
-                    <span className="text-xs text-slate-400 ml-1.5 font-mono">
-                      {s.studentCode}
-                    </span>
-                  </td>
-                  <td className="py-2 pr-4 text-xs text-slate-600 dark:text-slate-300">
-                    {s.taskTitle}
-                  </td>
-                  <td className="py-2 pr-4 font-mono text-xs tabular-nums text-right">
-                    {s.attemptNumber}/{s.requiredAttempts}
-                  </td>
-                  <td className="py-2 pr-4 font-mono text-xs tabular-nums text-right">
-                    {s.correctCount}/{s.totalCount}
-                  </td>
-                  <td className="py-2 pr-4 font-mono font-semibold tabular-nums text-right">
-                    {s.score}
-                  </td>
-                  <td className="py-2 pr-4 font-mono text-xs tabular-nums text-right text-slate-500">
-                    {formatDuration(s.durationSeconds)}
-                  </td>
-                  <td className="py-2 text-right text-xs font-medium">
-                    {s.metMinScore ? (
-                      <span className="text-emerald-700 dark:text-emerald-400">
-                        Đạt (≥{s.minScore})
+            {loading ? (
+              <TableSkeletonRows
+                rows={6}
+                rowHeightClass="h-10"
+                testId="reports-submissions-skeleton"
+                ariaLabel="Đang tải chi tiết lịch sử nộp bài..."
+                columns={[
+                  { variant: 'text', widths: ['w-40', 'w-44', 'w-36'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'text', widths: ['w-32', 'w-44', 'w-36'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'mono', align: 'right', widths: ['w-10', 'w-12'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'mono', align: 'right', widths: ['w-12', 'w-14'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'mono', align: 'right', widths: ['w-10', 'w-12'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'mono', align: 'right', widths: ['w-14', 'w-16'], cellClassName: 'py-2 pr-4' },
+                  { variant: 'text', align: 'right', widths: ['w-20', 'w-24'], cellClassName: 'py-2' },
+                ]}
+              />
+            ) : (
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {filteredSubmissions.map((s) => (
+                  <tr key={s.id} className="h-10">
+                    <td className="py-2 pr-4">
+                      <span className="font-medium">{s.studentName}</span>
+                      <span className="text-xs text-slate-400 ml-1.5 font-mono">
+                        {s.studentCode}
                       </span>
-                    ) : (
-                      <span className="text-red-600 dark:text-red-400">
-                        Chưa đạt ({s.minScore})
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
+                    </td>
+                    <td className="py-2 pr-4 text-xs text-slate-600 dark:text-slate-300">
+                      {s.taskTitle}
+                    </td>
+                    <td className="py-2 pr-4 font-mono text-xs tabular-nums text-right">
+                      {s.attemptNumber}/{s.requiredAttempts}
+                    </td>
+                    <td className="py-2 pr-4 font-mono text-xs tabular-nums text-right">
+                      {s.correctCount}/{s.totalCount}
+                    </td>
+                    <td className="py-2 pr-4 font-mono font-semibold tabular-nums text-right">
+                      {s.score}
+                    </td>
+                    <td className="py-2 pr-4 font-mono text-xs tabular-nums text-right text-slate-500">
+                      {formatDuration(s.durationSeconds)}
+                    </td>
+                    <td className="py-2 text-right text-xs font-medium">
+                      {s.metMinScore ? (
+                        <span className="text-emerald-700 dark:text-emerald-400">
+                          Đạt (≥{s.minScore})
+                        </span>
+                      ) : (
+                        <span className="text-red-600 dark:text-red-400">
+                          Chưa đạt ({s.minScore})
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {filteredSubmissions.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="py-8 text-center text-sm text-slate-500"
+                    >
+                      Chưa có lượt nộp bài nào khớp bộ lọc.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            )}
           </table>
         </div>
       </section>
@@ -287,40 +335,48 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
         <h2 className="font-display text-base font-semibold text-slate-900 dark:text-white">
           Lịch sử Các trận Thi đấu đã Kết thúc ({finishedBattles.length})
         </h2>
-        <div className="space-y-3">
-          {finishedBattles.map((room) => (
-            <div
-              key={room.id}
-              className="p-4 rounded-lg border border-slate-200 dark:border-slate-800 space-y-2"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="font-semibold text-sm">
-                  {room.configSnapshot.title} · Lớp{' '}
-                  {classMap.get(room.classId)?.name}
-                </div>
-                <div className="text-xs text-slate-500 font-mono">
-                  {room.finishedAt
-                    ? new Date(room.finishedAt).toLocaleString('vi-VN')
-                    : ''}
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-4 text-xs text-slate-600 dark:text-slate-300 tabular-nums">
-                {(room.rankedResults ?? []).slice(0, 3).map((r) => (
-                  <span key={r.studentId}>
-                    <strong>#{r.rank} {r.studentName}</strong>: {r.score} điểm (
-                    {formatDuration(r.durationSeconds)})
-                    {r.rewardedBreakMinutes > 0
-                      ? ` · +${r.rewardedBreakMinutes}p`
+        {loading ? (
+          <ListSkeleton
+            variant="detailed"
+            rows={3}
+            ariaLabel="Đang tải lịch sử các trận thi đấu..."
+          />
+        ) : (
+          <div className="space-y-3">
+            {finishedBattles.map((room) => (
+              <div
+                key={room.id}
+                className="p-4 rounded-lg border border-slate-200 dark:border-slate-800 space-y-2"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-semibold text-sm">
+                    {room.configSnapshot.title} · Lớp{' '}
+                    {classMap.get(room.classId)?.name}
+                  </div>
+                  <div className="text-xs text-slate-500 font-mono">
+                    {room.finishedAt
+                      ? new Date(room.finishedAt).toLocaleString('vi-VN')
                       : ''}
-                  </span>
-                ))}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-4 text-xs text-slate-600 dark:text-slate-300 tabular-nums">
+                  {(room.rankedResults ?? []).slice(0, 3).map((r) => (
+                    <span key={r.studentId}>
+                      <strong>#{r.rank} {r.studentName}</strong>: {r.score} điểm (
+                      {formatDuration(r.durationSeconds)})
+                      {r.rewardedBreakMinutes > 0
+                        ? ` · +${r.rewardedBreakMinutes}p`
+                        : ''}
+                    </span>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
-          {finishedBattles.length === 0 && (
-            <p className="text-sm text-slate-500">Chưa có trận thi đấu nào kết thúc.</p>
-          )}
-        </div>
+            ))}
+            {finishedBattles.length === 0 && (
+              <p className="text-sm text-slate-500">Chưa có trận thi đấu nào kết thúc.</p>
+            )}
+          </div>
+        )}
       </section>
     </div>
   );

@@ -30,15 +30,18 @@ import {
   type SupabaseConnectionReport,
   type SupabaseRemoteSample,
 } from '../utils/supabaseClient';
+import { ListSkeleton, TableSkeletonRows } from './TableSkeleton';
 
 interface SupabaseViewProps {
   db: Omit<AdminDatabase, 'teachers'> & { teachers: SafeTeacher[] };
+  loading?: boolean;
   onRefresh: () => Promise<void>;
   onNotify: (msg: string, isError?: boolean) => void;
 }
 
 export const SupabaseView: React.FC<SupabaseViewProps> = ({
   db,
+  loading = false,
   onRefresh,
   onNotify,
 }) => {
@@ -549,7 +552,7 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
       </div>
 
       {/* Table-by-table Schema & Count Inspection Report */}
-      {report && report.tableChecks.length > 0 && (
+      {(testing || loading || (report && report.tableChecks.length > 0)) && (
         <section
           aria-label="Kết quả kiểm tra chi tiết từng bảng Supabase"
           className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-4"
@@ -560,8 +563,11 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
                 Chi tiết Trạng thái Bảng & Dữ liệu trên Supabase
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-                {report.readyTables}/{report.tablesChecked} bảng sẵn sàng
-                {report.latencyMs ? ` · Độ trễ: ${report.latencyMs}ms` : ''}
+                {testing || loading
+                  ? 'Đang kiểm tra trạng thái các bảng trên Supabase...'
+                  : `${report?.readyTables ?? 0}/${report?.tablesChecked ?? 0} bảng sẵn sàng${
+                      report?.latencyMs ? ` · Độ trễ: ${report.latencyMs}ms` : ''
+                    }`}
               </p>
             </div>
           </div>
@@ -577,43 +583,58 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
                   <th className="py-2.5 px-4 font-semibold">Trạng thái</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {report.tableChecks.map((row) => (
-                  <tr key={row.table}>
-                    <td className="py-2.5 px-4 font-mono font-semibold text-slate-900 dark:text-slate-100">
-                      public.{row.table}
-                    </td>
-                    <td className="py-2.5 px-4 text-slate-600 dark:text-slate-300">
-                      {row.label}
-                    </td>
-                    <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-500 dark:text-slate-400">
-                      {row.localCount ?? '—'}
-                    </td>
-                    <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100">
-                      {row.remoteCount !== null ? row.remoteCount : '—'}
-                    </td>
-                    <td className="py-2.5 px-4">
-                      {row.ok ? (
-                        <span className="inline-flex items-center gap-1 font-medium text-emerald-700 dark:text-emerald-400">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Sẵn sàng</span>
-                        </span>
-                      ) : (
-                        <span className="text-red-600 dark:text-red-400">
-                          {row.error || 'Chưa tạo bảng'}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
+              {testing || loading ? (
+                <TableSkeletonRows
+                  rows={8}
+                  rowHeightClass="h-10"
+                  ariaLabel="Đang tải trạng thái các bảng Supabase..."
+                  columns={[
+                    { variant: 'mono', widths: ['w-36', 'w-44', 'w-32'], cellClassName: 'py-2.5 px-4' },
+                    { variant: 'text', widths: ['w-40', 'w-48', 'w-36'], cellClassName: 'py-2.5 px-4' },
+                    { variant: 'mono', align: 'right', widths: ['w-10', 'w-12'], cellClassName: 'py-2.5 px-4' },
+                    { variant: 'mono', align: 'right', widths: ['w-10', 'w-12'], cellClassName: 'py-2.5 px-4' },
+                    { variant: 'text', widths: ['w-20', 'w-24'], cellClassName: 'py-2.5 px-4' },
+                  ]}
+                />
+              ) : (
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {report?.tableChecks.map((row) => (
+                    <tr key={row.table}>
+                      <td className="py-2.5 px-4 font-mono font-semibold text-slate-900 dark:text-slate-100">
+                        public.{row.table}
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-600 dark:text-slate-300">
+                        {row.label}
+                      </td>
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                        {row.localCount ?? '—'}
+                      </td>
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100">
+                        {row.remoteCount !== null ? row.remoteCount : '—'}
+                      </td>
+                      <td className="py-2.5 px-4">
+                        {row.ok ? (
+                          <span className="inline-flex items-center gap-1 font-medium text-emerald-700 dark:text-emerald-400">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Sẵn sàng</span>
+                          </span>
+                        ) : (
+                          <span className="text-red-600 dark:text-red-400">
+                            {row.error || 'Chưa tạo bảng'}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              )}
             </table>
           </div>
         </section>
       )}
 
       {/* Remote Sample Query Preview */}
-      {sample && (
+      {(sampling || sample) && (
         <section
           aria-label="Dữ liệu đọc thử từ Supabase"
           className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-4"
@@ -622,15 +643,21 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
             <h3 className="font-display text-base font-semibold text-slate-900 dark:text-white">
               Kết quả Đọc thử Trực tiếp từ Supabase
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400">{sample.message}</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {sampling
+                ? 'Đang truy vấn dữ liệu mẫu từ Supabase...'
+                : sample?.message}
+            </p>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-2">
               <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                Bảng public.knowledge_parts ({sample.parts.length} dòng)
+                Bảng public.knowledge_parts ({sampling ? '...' : `${sample?.parts.length ?? 0} dòng`})
               </div>
-              {sample.parts.length === 0 ? (
+              {sampling ? (
+                <ListSkeleton variant="compact" rows={4} ariaLabel="Đang đọc thử knowledge_parts..." />
+              ) : !sample || sample.parts.length === 0 ? (
                 <div className="text-xs text-slate-500">
                   Bảng chưa có dữ liệu. Hãy bấm "Đồng bộ Dữ liệu lên Supabase".
                 </div>
@@ -652,9 +679,11 @@ export const SupabaseView: React.FC<SupabaseViewProps> = ({
 
             <div className="border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-2">
               <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                Bảng public.questions ({sample.questions.length} dòng)
+                Bảng public.questions ({sampling ? '...' : `${sample?.questions.length ?? 0} dòng`})
               </div>
-              {sample.questions.length === 0 ? (
+              {sampling ? (
+                <ListSkeleton variant="compact" rows={4} ariaLabel="Đang đọc thử questions..." />
+              ) : !sample || sample.questions.length === 0 ? (
                 <div className="text-xs text-slate-500">
                   Bảng chưa có dữ liệu. Hãy bấm "Đồng bộ Dữ liệu lên Supabase".
                 </div>

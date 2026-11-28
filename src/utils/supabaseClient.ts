@@ -233,13 +233,13 @@ export async function testSupabaseConnection(
     {
       table: 'knowledge_categories',
       label: 'Nhóm kiến thức (GM, OT...)',
-      selectCols: 'id, module, code',
+      selectCols: 'id, module, code, is_enabled',
       localCount: localDb?.knowledgeCategories?.length ?? null,
     },
     {
       table: 'knowledge_parts',
       label: 'Phần kiến thức (GM1, OT1...)',
-      selectCols: 'id, module, category, code',
+      selectCols: 'id, module, category, code, is_enabled',
       localCount: localDb?.knowledgeParts?.length ?? null,
     },
     {
@@ -750,6 +750,10 @@ export async function fetchQuestionBankFromSupabase(
         title: String(p.title || `Chuyên đề ${p.code || cat}`),
         description: String(p.description || ''),
         orderIndex: typeof p.order_index === 'number' ? p.order_index : 1,
+        isEnabled:
+          p.is_enabled === undefined || p.is_enabled === null
+            ? true
+            : Boolean(p.is_enabled),
       };
     });
 
@@ -775,6 +779,7 @@ export async function fetchQuestionBankFromSupabase(
           title: q.topic || `Chuyên đề ${q.contentCode}`,
           description: '',
           orderIndex: sameGroupCount + 1,
+          isEnabled: true,
         });
       }
     }
@@ -826,6 +831,10 @@ export async function fetchQuestionBankFromSupabase(
             c.description ?? CATEGORY_LABELS[code]?.description ?? ''
           ),
           orderIndex: typeof c.order_index === 'number' ? c.order_index : 1,
+          isEnabled:
+            c.is_enabled === undefined || c.is_enabled === null
+              ? true
+              : Boolean(c.is_enabled),
         };
       }
     );
@@ -848,6 +857,7 @@ export async function fetchQuestionBankFromSupabase(
           title: CATEGORY_LABELS[catCode]?.name || `Nhóm ${catCode}`,
           description: CATEGORY_LABELS[catCode]?.description || '',
           orderIndex: sameModCount + 1,
+          isEnabled: true,
         });
       }
     }
@@ -1065,6 +1075,7 @@ async function upsertKnowledgeCategoryRaw(
       title: cat.title,
       description: cat.description,
       order_index: cat.orderIndex,
+      is_enabled: cat.isEnabled !== false,
     },
     { onConflict: 'module,code' }
   );
@@ -1115,6 +1126,7 @@ async function upsertKnowledgePartRaw(
       title: part.title,
       description: part.description,
       order_index: part.orderIndex,
+      is_enabled: part.isEnabled !== false,
     },
     { onConflict: 'module,category,code' }
   );
@@ -1229,6 +1241,7 @@ async function ensureCategoryParentRaw(
       title: cat.title,
       description: cat.description,
       order_index: cat.orderIndex,
+      is_enabled: cat.isEnabled !== false,
     },
     { onConflict: 'module,code', ignoreDuplicates: true }
   );
@@ -1258,6 +1271,7 @@ async function ensurePartParentRaw(
       title: part.title,
       description: part.description,
       order_index: part.orderIndex,
+      is_enabled: part.isEnabled !== false,
     },
     { onConflict: 'module,category,code', ignoreDuplicates: true }
   );
@@ -1316,6 +1330,7 @@ export async function syncPartWithParentsOnSupabase(
           title: CATEGORY_LABELS[cleanCat]?.name || `Nhóm ${cleanCat}`,
           description: CATEGORY_LABELS[cleanCat]?.description || '',
           orderIndex: 1,
+          isEnabled: true,
         });
       }
       await upsertKnowledgePartRaw(client, part);
@@ -1365,6 +1380,7 @@ export async function syncQuestionWithParentsOnSupabase(
         title: CATEGORY_LABELS[cleanCat]?.name || `Nhóm ${cleanCat}`,
         description: CATEGORY_LABELS[cleanCat]?.description || '',
         orderIndex: 99,
+        isEnabled: true,
       });
     }
 
@@ -1386,6 +1402,7 @@ export async function syncQuestionWithParentsOnSupabase(
         title: q.topic || `Chuyên đề ${cleanPart}`,
         description: '',
         orderIndex: 99,
+        isEnabled: true,
       });
     }
 

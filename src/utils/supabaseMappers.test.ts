@@ -124,4 +124,49 @@ test('domain row mappers round-trip schools, classes, students, question bank, t
   assert.equal(rooms.length, seed.battleRooms.length);
   assert.equal(rooms[0].participants.length, seed.battleRooms[0].participants.length);
   assert.equal(rooms[0].events.length, seed.battleRooms[0].events.length);
+
+  const matrixQ = qb.questions.find((q) => q.type === 'matrix_choice');
+  assert.ok(matrixQ);
+  assert.ok('slots' in matrixQ.payload);
+  assert.equal(matrixQ.payload.slots.length, 6);
+
+  const mappedCats = mapQuestionBankRowsToDomain({
+    moduleRows: [],
+    categoryRows: [
+      { id: 'c_legacy', module: 'computing_fundamentals', code: 'GM', title: 'GM' },
+      {
+        id: 'c_off',
+        module: 'computing_fundamentals',
+        code: 'OT',
+        title: 'OT',
+        is_enabled: false,
+      },
+    ],
+    partRows: [
+      {
+        id: 'p_legacy',
+        module: 'computing_fundamentals',
+        level: 'LV1',
+        category: 'OT',
+        code: 'OT1',
+        title: 'OT1',
+      },
+      {
+        id: 'p_off',
+        module: 'computing_fundamentals',
+        level: 'LV1',
+        category: 'OT',
+        code: 'OT2',
+        title: 'OT2',
+        is_enabled: false,
+      },
+    ],
+    questionRows: [],
+    setRows: [],
+  });
+  assert.equal(mappedCats.knowledgeCategories[0].isEnabled, true);
+  assert.equal(mappedCats.knowledgeCategories[1].isEnabled, false);
+  assert.equal(mappedCats.knowledgeParts[0].isEnabled, true);
+  assert.equal(mappedCats.knowledgeParts[1].isEnabled, false);
 });
+

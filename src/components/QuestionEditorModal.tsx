@@ -14,6 +14,7 @@ import {
   type KnowledgePart,
   type MatchingItem,
   type MatchingPair,
+  type MatrixChoiceSlot,
   type Question,
   type QuestionOption,
   type QuestionPayload,
@@ -24,7 +25,7 @@ import { api } from '../utils/api';
 import {
   extractImageFileFromClipboardData,
   getDefaultInstructionForQuestionType,
-  shouldUploadHotspotFileOnSave,
+  shouldUploadQuestionImageOnSave,
 } from '../utils/ic3Rules';
 import {
   isSupabaseConfigured,
@@ -199,6 +200,66 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
         ]
   );
 
+  const [matrixTemplateText, setMatrixTemplateText] = useState<string>(
+    initialQuestion?.type === 'matrix_choice' &&
+      initialPayload &&
+      'templateText' in initialPayload
+      ? initialPayload.templateText
+      : 'Để _(1)_ kết quả tìm kiếm bằng cách _(2)_'
+  );
+  const [matrixOptions, setMatrixOptions] = useState<QuestionOption[]>(
+    initialQuestion?.type === 'matrix_choice' &&
+      initialPayload &&
+      'options' in initialPayload
+      ? initialPayload.options
+      : [
+          { id: 'mopt_1', text: '' },
+          { id: 'mopt_2', text: '' },
+          { id: 'mopt_3', text: '' },
+        ]
+  );
+  const [matrixSlots, setMatrixSlots] = useState<MatrixChoiceSlot[]>(
+    initialQuestion?.type === 'matrix_choice' &&
+      initialPayload &&
+      'slots' in initialPayload
+      ? initialPayload.slots
+      : [
+          { id: 'slot_1', label: '(1)', correctOptionId: 'mopt_1' },
+          { id: 'slot_2', label: '(2)', correctOptionId: 'mopt_2' },
+        ]
+  );
+
+  // Optional illustration image state (for all non-hotspot question types)
+  const illustFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [savedIllustImageUrl, setSavedIllustImageUrl] = useState<string>(
+    initialQuestion?.type !== 'hotspot' &&
+      initialPayload &&
+      'imageUrl' in initialPayload &&
+      initialPayload.imageUrl
+      ? initialPayload.imageUrl
+      : ''
+  );
+  const [pendingIllustFile, setPendingIllustFile] = useState<File | null>(null);
+  const [pendingIllustPreviewUrl, setPendingIllustPreviewUrl] = useState<string>('');
+  const [illustImageAlt, setIllustImageAlt] = useState<string>(
+    initialQuestion?.type !== 'hotspot' &&
+      initialPayload &&
+      'imageAlt' in initialPayload &&
+      initialPayload.imageAlt
+      ? initialPayload.imageAlt
+      : ''
+  );
+  const [illustUploadNote, setIllustUploadNote] = useState<string | null>(null);
+  const displayedIllustImageUrl = pendingIllustPreviewUrl || savedIllustImageUrl;
+
+  useEffect(() => {
+    return () => {
+      if (pendingIllustPreviewUrl && pendingIllustPreviewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(pendingIllustPreviewUrl);
+      }
+    };
+  }, [pendingIllustPreviewUrl]);
+
   const hotspotFileInputRef = useRef<HTMLInputElement | null>(null);
   const [hotspotType, setHotspotType] = useState<HotspotType | undefined>(
     initialPayload && 'hotspotType' in initialPayload
@@ -206,7 +267,10 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
       : undefined
   );
   const [savedHotspotImageUrl, setSavedHotspotImageUrl] = useState<string>(
-    initialPayload && 'imageUrl' in initialPayload && initialPayload.imageUrl
+    initialQuestion?.type === 'hotspot' &&
+      initialPayload &&
+      'imageUrl' in initialPayload &&
+      initialPayload.imageUrl
       ? initialPayload.imageUrl
       : ''
   );
@@ -236,8 +300,11 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
   const [hasHotspotTarget, setHasHotspotTarget] = useState<boolean>(
     Boolean(initialPayload && 'hotspotTarget' in initialPayload)
   );
-  const [imageAlt, setImageAlt] = useState(
-    initialPayload && 'imageAlt' in initialPayload
+  const [imageAlt, setImageAlt] = useState<string>(
+    initialQuestion?.type === 'hotspot' &&
+      initialPayload &&
+      'imageAlt' in initialPayload &&
+      initialPayload.imageAlt
       ? initialPayload.imageAlt
       : 'Ảnh câu hỏi chọn điểm trên hình'
   );
@@ -246,6 +313,40 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
 
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  function handleIllustFileSelected(
+    file: File | undefined,
+    source: 'upload' | 'paste' = 'upload'
+  ) {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setError('Vui lòng chọn đúng định dạng tệp hình ảnh (PNG, JPG, WebP...).');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Ảnh minh họa tải lên không được vượt quá 10 MB.');
+      return;
+    }
+    setError(null);
+    const previewUrl = URL.createObjectURL(file);
+    const actionVerb = source === 'paste' ? 'dán ảnh minh họa' : 'chọn ảnh minh họa';
+    setPendingIllustFile(file);
+    setPendingIllustPreviewUrl(previewUrl);
+    setIllustUploadNote(
+      isSupabaseConfigured() || serverEnvReady
+        ? `Đã ${actionVerb} xem trước. Ảnh sẽ được tải lên Storage khi bạn bấm "Lưu Câu hỏi".`
+        : `Đã ${actionVerb} xem trước. Bấm "Lưu Câu hỏi" để đính kèm ảnh vào câu hỏi.`
+    );
+    if (!illustImageAlt.trim()) {
+      const cleanName = (file.name || '').replace(/\.[^.]+$/, '').trim();
+      if (cleanName && cleanName.toLowerCase() !== 'image') {
+        setIllustImageAlt(cleanName);
+      }
+    }
+    if (illustFileInputRef.current) {
+      illustFileInputRef.current.value = '';
+    }
+  }
 
   function handleHotspotFileSelected(
     file: File | undefined,
@@ -287,11 +388,14 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
   const pasteHandlerRef = useRef<(file: File) => void>(() => {});
   pasteHandlerRef.current = (file: File) => {
     if (uploadingHotspotImage || saving) return;
-    void handleHotspotFileSelected(file, 'paste');
+    if (type === 'hotspot') {
+      void handleHotspotFileSelected(file, 'paste');
+    } else {
+      void handleIllustFileSelected(file, 'paste');
+    }
   };
 
   useEffect(() => {
-    if (type !== 'hotspot') return;
     const onWindowPaste = (e: ClipboardEvent) => {
       const imageFile = extractImageFileFromClipboardData(e.clipboardData);
       if (!imageFile) return;
@@ -300,7 +404,20 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
     };
     window.addEventListener('paste', onWindowPaste);
     return () => window.removeEventListener('paste', onWindowPaste);
-  }, [type]);
+  }, []);
+
+  function attachOptionalIllustration(
+    payload: Exclude<QuestionPayload, { hotspotTarget: HotspotTarget }>
+  ): QuestionPayload {
+    if (savedIllustImageUrl && !pendingIllustFile) {
+      return {
+        ...payload,
+        imageUrl: savedIllustImageUrl,
+        ...(illustImageAlt.trim() ? { imageAlt: illustImageAlt.trim() } : {}),
+      };
+    }
+    return payload;
+  }
 
   function buildPayload(): QuestionPayload | null {
     if (type === 'single') {
@@ -312,7 +429,10 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
       const validCorrect = cleanOpts.some((o) => o.id === correctOptionId)
         ? correctOptionId
         : cleanOpts[0].id;
-      return { options: cleanOpts, correctOptionId: validCorrect };
+      return attachOptionalIllustration({
+        options: cleanOpts,
+        correctOptionId: validCorrect,
+      });
     }
 
     if (type === 'multiple') {
@@ -328,7 +448,10 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
         setError('Phải chọn ít nhất 1 đáp án đúng.');
         return null;
       }
-      return { options: cleanOpts, correctOptionIds: validIds };
+      return attachOptionalIllustration({
+        options: cleanOpts,
+        correctOptionIds: validIds,
+      });
     }
 
     if (type === 'true_false') {
@@ -337,7 +460,7 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
         setError('Cần nhập ít nhất 1 ý phát biểu Đúng/Sai.');
         return null;
       }
-      return { statements: cleanStmts };
+      return attachOptionalIllustration({ statements: cleanStmts });
     }
 
     if (type === 'matching') {
@@ -357,11 +480,41 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
               : cleanR[0].id,
         };
       });
-      return {
+      return attachOptionalIllustration({
         matchingLeft: cleanL,
         matchingRight: cleanR,
         correctPairs: pairs,
-      };
+      });
+    }
+
+    if (type === 'matrix_choice') {
+      const cleanOpts = matrixOptions
+        .map((o) => ({ ...o, text: o.text.trim() }))
+        .filter((o) => o.text.length > 0);
+      if (cleanOpts.length < 2) {
+        setError('Cần nhập ít nhất 2 cột lựa chọn cho bảng chọn.');
+        return null;
+      }
+      if (matrixSlots.length === 0) {
+        setError('Cần có ít nhất 1 chỗ trống trong bảng chọn.');
+        return null;
+      }
+      const validOptIds = new Set(cleanOpts.map((o) => o.id));
+      const missingChoice = matrixSlots.some((s) => !validOptIds.has(s.correctOptionId));
+      if (missingChoice) {
+        setError('Vui lòng chọn 1 đáp án cột có nội dung hợp lệ cho mỗi dòng chỗ trống.');
+        return null;
+      }
+      const cleanSlots: MatrixChoiceSlot[] = matrixSlots.map((s, idx) => ({
+        id: s.id,
+        label: s.label.trim() || `(${idx + 1})`,
+        correctOptionId: s.correctOptionId,
+      }));
+      return attachOptionalIllustration({
+        templateText: matrixTemplateText.trim(),
+        options: cleanOpts,
+        slots: cleanSlots,
+      });
     }
 
     if (!displayedHotspotImageUrl && !hotspotType) {
@@ -409,45 +562,50 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
     setSaving(true);
     try {
       let finalPayload: QuestionPayload = basePayload;
-      if (type === 'hotspot' && pendingHotspotFile) {
+      const activePendingFile =
+        type === 'hotspot' ? pendingHotspotFile : pendingIllustFile;
+      if (activePendingFile) {
         setUploadingHotspotImage(true);
         try {
           let resolvedImageUrl = '';
           const browserReady = isSupabaseConfigured();
-          const canUploadStorage = shouldUploadHotspotFileOnSave({
+          const canUploadStorage = shouldUploadQuestionImageOnSave({
             questionType: type,
-            hasPendingFile: Boolean(pendingHotspotFile),
+            hasPendingFile: Boolean(activePendingFile),
             supabaseConfigured: browserReady || serverEnvReady,
             promptValid: Boolean(prompt.trim()),
             hotspotImageReady: Boolean(displayedHotspotImageUrl || hotspotType),
             hotspotTargetReady: hasHotspotTarget,
           });
           if (canUploadStorage && browserReady) {
-            const uploaded = await uploadHotspotImageToSupabase(pendingHotspotFile);
+            const uploaded = await uploadHotspotImageToSupabase(activePendingFile);
             if (uploaded.ok && uploaded.url) {
               resolvedImageUrl = uploaded.url;
             } else {
-              resolvedImageUrl = await fileToCompressedDataUrl(pendingHotspotFile);
+              resolvedImageUrl = await fileToCompressedDataUrl(activePendingFile);
             }
           } else if (canUploadStorage && serverEnvReady) {
-            const compressed = await fileToCompressedDataUrl(pendingHotspotFile);
+            const compressed = await fileToCompressedDataUrl(activePendingFile);
             try {
               const uploaded = await api.uploadHotspotImage({
                 base64DataUrl: compressed,
-                fileName: pendingHotspotFile.name,
-                mimeType: pendingHotspotFile.type || 'image/webp',
+                fileName: activePendingFile.name,
+                mimeType: activePendingFile.type || 'image/webp',
               });
               resolvedImageUrl = uploaded.ok && uploaded.url ? uploaded.url : compressed;
             } catch {
               resolvedImageUrl = compressed;
             }
           } else {
-            resolvedImageUrl = await fileToCompressedDataUrl(pendingHotspotFile);
+            resolvedImageUrl = await fileToCompressedDataUrl(activePendingFile);
           }
           finalPayload = {
             ...basePayload,
             imageUrl: resolvedImageUrl,
-          };
+            ...(type !== 'hotspot' && illustImageAlt.trim()
+              ? { imageAlt: illustImageAlt.trim() }
+              : {}),
+          } as QuestionPayload;
         } finally {
           setUploadingHotspotImage(false);
         }
@@ -992,6 +1150,229 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
               </div>
             )}
 
+            {type === 'matrix_choice' && (
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label
+                      htmlFor="matrix-template"
+                      className="text-xs font-semibold text-slate-700 dark:text-slate-300"
+                    >
+                      Các câu cần điền khuyết (dùng ký hiệu <code className="font-mono text-blue-600 dark:text-blue-400">_(1)_</code>, <code className="font-mono text-blue-600 dark:text-blue-400">_(2)_</code>...)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextIndex = matrixSlots.length + 1;
+                        const slotId = `slot_${nextIndex}_${Date.now()}`;
+                        const slotLabel = `(${nextIndex})`;
+                        setMatrixSlots([
+                          ...matrixSlots,
+                          {
+                            id: slotId,
+                            label: slotLabel,
+                            correctOptionId: matrixOptions[0]?.id ?? '',
+                          },
+                        ]);
+                        setMatrixTemplateText((prev) =>
+                          prev.trim()
+                            ? `${prev.trimEnd()} _(${nextIndex})_`
+                            : `_(${nextIndex})_`
+                        );
+                      }}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 dark:text-blue-400 cursor-pointer whitespace-nowrap"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Thêm &amp; chèn chỗ trống ({matrixSlots.length + 1})
+                    </button>
+                  </div>
+                  <textarea
+                    id="matrix-template"
+                    rows={3}
+                    value={matrixTemplateText}
+                    onChange={(e) => setMatrixTemplateText(e.target.value)}
+                    placeholder="Ví dụ:&#10;Để _(1)_ kết quả tìm kiếm sử dụng phương pháp _(2)_ bằng cách dùng toán tử AND&#10;Để _(3)_ kết quả tìm kiếm sử dụng phương pháp _(4)_ bằng cách dùng toán tử OR"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                  />
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Mỗi dòng sẽ hiển thị tương ứng với các vị trí đánh số <span className="font-mono font-semibold text-red-600 dark:text-red-400">_(1)_</span>, <span className="font-mono font-semibold text-red-600 dark:text-red-400">_(2)_</span>... Bảng bên dưới dùng chung danh sách cột cho mọi chỗ trống.
+                  </p>
+                </div>
+
+                {/* Shared Columns (Options) */}
+                <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                      Các cột phương án dùng chung ({matrixOptions.length} cột)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMatrixOptions([
+                          ...matrixOptions,
+                          { id: `mopt_${matrixOptions.length + 1}_${Date.now()}`, text: '' },
+                        ])
+                      }
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 dark:text-blue-400 cursor-pointer whitespace-nowrap"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Thêm cột lựa chọn
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {matrixOptions.map((opt, idx) => (
+                      <div key={opt.id} className="flex items-center gap-1.5">
+                        <span className="text-xs font-mono text-slate-400 w-5 shrink-0">
+                          C{idx + 1}
+                        </span>
+                        <input
+                          type="text"
+                          value={opt.text}
+                          placeholder={`Cột lựa chọn ${idx + 1} (VD: Mở rộng)`}
+                          onChange={(e) => {
+                            const next = [...matrixOptions];
+                            next[idx] = { ...opt, text: e.target.value };
+                            setMatrixOptions(next);
+                          }}
+                          className="flex-1 min-w-0 px-2.5 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                        />
+                        {matrixOptions.length > 2 && (
+                          <button
+                            type="button"
+                            aria-label={`Xóa cột lựa chọn ${idx + 1}`}
+                            onClick={() => {
+                              const nextOpts = matrixOptions.filter((_, i) => i !== idx);
+                              setMatrixOptions(nextOpts);
+                              const fallbackId = nextOpts[0]?.id ?? '';
+                              setMatrixSlots((prev) =>
+                                prev.map((s) =>
+                                  s.correctOptionId === opt.id
+                                    ? { ...s, correctOptionId: fallbackId }
+                                    : s
+                                )
+                              );
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Matrix Radio Grid */}
+                <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                      Bảng chọn đáp án đúng cho từng chỗ trống
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextIndex = matrixSlots.length + 1;
+                        setMatrixSlots([
+                          ...matrixSlots,
+                          {
+                            id: `slot_${nextIndex}_${Date.now()}`,
+                            label: `(${nextIndex})`,
+                            correctOptionId: matrixOptions[0]?.id ?? '',
+                          },
+                        ]);
+                      }}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 dark:text-blue-400 cursor-pointer whitespace-nowrap"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Thêm dòng ({matrixSlots.length + 1})
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+                    <table className="w-full text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-blue-600 text-white">
+                          <th className="px-3 py-2 text-left font-semibold border-r border-blue-500/60 w-24">
+                            Chỗ trống
+                          </th>
+                          {matrixOptions.map((opt, oIdx) => (
+                            <th
+                              key={opt.id}
+                              className="px-3 py-2 text-center font-semibold border-r border-blue-500/60 last:border-r-0 min-w-[100px]"
+                            >
+                              {opt.text.trim() || `Cột ${oIdx + 1}`}
+                            </th>
+                          ))}
+                          {matrixSlots.length > 1 && (
+                            <th className="px-2 py-2 text-center font-semibold w-10">
+                              Xóa
+                            </th>
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                        {matrixSlots.map((slot, sIdx) => (
+                          <tr
+                            key={slot.id}
+                            className="hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                          >
+                            <td className="px-2 py-2 border-r border-slate-200 dark:border-slate-800">
+                              <input
+                                type="text"
+                                aria-label={`Nhãn chỗ trống dòng ${sIdx + 1}`}
+                                value={slot.label}
+                                onChange={(e) => {
+                                  const next = [...matrixSlots];
+                                  next[sIdx] = { ...slot, label: e.target.value };
+                                  setMatrixSlots(next);
+                                }}
+                                className="w-16 px-2 py-1 text-xs font-mono font-bold text-center text-red-600 dark:text-red-400 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950"
+                              />
+                            </td>
+                            {matrixOptions.map((opt, oIdx) => {
+                              const checked = slot.correctOptionId === opt.id;
+                              return (
+                                <td
+                                  key={opt.id}
+                                  className={`px-3 py-2 text-center border-r border-slate-200 dark:border-slate-800 last:border-r-0 ${
+                                    checked ? 'bg-blue-50/70 dark:bg-blue-950/40' : ''
+                                  }`}
+                                >
+                                  <input
+                                    type="radio"
+                                    name={`matrix-slot-${slot.id}`}
+                                    checked={checked}
+                                    aria-label={`Chọn ${opt.text.trim() || `Cột ${oIdx + 1}`} cho ${slot.label}`}
+                                    onChange={() => {
+                                      const next = [...matrixSlots];
+                                      next[sIdx] = { ...slot, correctOptionId: opt.id };
+                                      setMatrixSlots(next);
+                                    }}
+                                    className="h-4 w-4 text-blue-600 cursor-pointer"
+                                  />
+                                </td>
+                              );
+                            })}
+                            {matrixSlots.length > 1 && (
+                              <td className="px-2 py-2 text-center">
+                                <button
+                                  type="button"
+                                  aria-label={`Xóa dòng ${slot.label}`}
+                                  onClick={() =>
+                                    setMatrixSlots(matrixSlots.filter((_, i) => i !== sIdx))
+                                  }
+                                  className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {type === 'hotspot' && (
               <div className="space-y-3">
                 <input
@@ -1127,6 +1508,98 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
               </div>
             )}
           </div>
+
+          {/* Optional Illustration Image for all non-hotspot question types */}
+          {type !== 'hotspot' && (
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 space-y-3">
+              <input
+                ref={illustFileInputRef}
+                id="q-illust-upload"
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={(e) => handleIllustFileSelected(e.target.files?.[0])}
+                className="sr-only"
+              />
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Hình ảnh minh họa (tùy chọn)
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Không bắt buộc — giáo viên có thể tải ảnh, dán trực tiếp bằng{' '}
+                    <kbd className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-[10px]">
+                      Ctrl + V
+                    </kbd>
+                    , hoặc bỏ trống nếu không cần.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={uploadingHotspotImage || saving}
+                    onClick={() => illustFileInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                  >
+                    <ImagePlus className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                    <span>
+                      {displayedIllustImageUrl ? 'Đổi ảnh minh họa' : 'Thêm ảnh minh họa'}
+                    </span>
+                  </button>
+                  {displayedIllustImageUrl && (
+                    <button
+                      type="button"
+                      disabled={uploadingHotspotImage || saving}
+                      onClick={() => {
+                        setPendingIllustFile(null);
+                        setPendingIllustPreviewUrl('');
+                        setSavedIllustImageUrl('');
+                        setIllustImageAlt('');
+                        setIllustUploadNote(null);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Xóa ảnh</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {illustUploadNote && (
+                <div className="p-2.5 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/70 dark:bg-blue-950/40 text-xs text-blue-800 dark:text-blue-200">
+                  {illustUploadNote}
+                </div>
+              )}
+
+              {displayedIllustImageUrl && (
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start">
+                  <div className="md:col-span-7">
+                    <img
+                      src={displayedIllustImageUrl}
+                      alt={illustImageAlt.trim() || prompt.trim() || 'Hình ảnh minh họa câu hỏi'}
+                      referrerPolicy="no-referrer"
+                      className="max-h-60 w-auto max-w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 object-contain"
+                    />
+                  </div>
+                  <div className="md:col-span-5">
+                    <label htmlFor="q-illust-alt" className="block text-xs font-medium mb-1">
+                      Mô tả ảnh minh họa (tùy chọn)
+                    </label>
+                    <input
+                      id="q-illust-alt"
+                      type="text"
+                      value={illustImageAlt}
+                      onChange={(e) => setIllustImageAlt(e.target.value)}
+                      placeholder="VD: Bảng minh họa thanh công cụ hoặc sơ đồ"
+                      className="w-full px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Explanation & Tips */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

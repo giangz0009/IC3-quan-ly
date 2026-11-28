@@ -99,10 +99,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-200 dark:border-slate-800">
             <div>
               <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                5 dạng câu hỏi IC3 chuẩn
+                6 dạng câu hỏi IC3 chuẩn
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Trắc nghiệm, nhiều lựa chọn, Đúng/Sai từng ý, Ghép nối và khoanh vùng Hotspot trực quan.
+                Trắc nghiệm, nhiều lựa chọn, Đúng/Sai, Ghép nối, Điền khuyết bảng chọn và Hotspot.
               </p>
             </div>
             <div>

@@ -7,7 +7,8 @@ export type QuestionType =
   | 'multiple'
   | 'true_false'
   | 'matching'
-  | 'hotspot';
+  | 'hotspot'
+  | 'matrix_choice';
 export type QuizMode = 'practice' | 'exam';
 export type HotspotType =
   | 'word_ribbon'
@@ -79,6 +80,12 @@ export interface MatchingPair {
   rightId: string;
 }
 
+export interface MatrixChoiceSlot {
+  id: string;
+  label: string;
+  correctOptionId: string;
+}
+
 export interface HotspotTarget {
   label: string;
   minX: number;
@@ -91,18 +98,33 @@ export type QuestionPayload =
   | {
       options: QuestionOption[];
       correctOptionId: string;
+      imageUrl?: string;
+      imageAlt?: string;
     }
   | {
       options: QuestionOption[];
       correctOptionIds: string[];
+      imageUrl?: string;
+      imageAlt?: string;
     }
   | {
       statements: TrueFalseStatement[];
+      imageUrl?: string;
+      imageAlt?: string;
     }
   | {
       matchingLeft: MatchingItem[];
       matchingRight: MatchingItem[];
       correctPairs: MatchingPair[];
+      imageUrl?: string;
+      imageAlt?: string;
+    }
+  | {
+      templateText: string;
+      options: QuestionOption[];
+      slots: MatrixChoiceSlot[];
+      imageUrl?: string;
+      imageAlt?: string;
     }
   | {
       imageUrl?: string;
@@ -127,6 +149,7 @@ export interface KnowledgeCategoryRecord {
   title: string;
   description: string;
   orderIndex: number;
+  isEnabled: boolean;
 }
 
 export interface KnowledgePart {
@@ -138,6 +161,7 @@ export interface KnowledgePart {
   title: string;
   description: string;
   orderIndex: number;
+  isEnabled: boolean;
 }
 
 export interface Question {
@@ -355,6 +379,7 @@ export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
   true_false: 'Đúng / Sai từng ý',
   matching: 'Ghép nối Cột A – B',
   hotspot: 'Chọn điểm trên hình (Hotspot)',
+  matrix_choice: 'Điền khuyết bảng chọn (Matrix)',
 };
 
 export const QUESTION_DEFAULT_INSTRUCTIONS: Record<QuestionType, string> = {
@@ -363,6 +388,8 @@ export const QUESTION_DEFAULT_INSTRUCTIONS: Record<QuestionType, string> = {
   true_false: 'Chọn Đúng hoặc Sai cho từng ý.',
   matching: 'Chọn cặp tương ứng giữa Cột A và Cột B.',
   hotspot: 'Nhấp chuột trực tiếp vào vùng tương ứng trên hình.',
+  matrix_choice:
+    'Hoàn thành các chỗ trống (1), (2)... bằng cách chọn đáp án đúng cho từng dòng trong bảng.',
 };
 
 export const HOTSPOT_TYPE_LABELS: Record<HotspotType, string> = {

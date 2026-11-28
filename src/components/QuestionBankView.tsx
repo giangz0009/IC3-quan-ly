@@ -4,17 +4,20 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  CheckCircle2,
   ChevronRight,
-  Database,
-  DownloadCloud,
+  Download,
+  FileJson,
+  FileSpreadsheet,
   Layers,
   ListOrdered,
   Loader2,
+  PauseCircle,
   Pencil,
   Plus,
   Search,
   Trash2,
-  UploadCloud,
+  Upload,
   X,
 } from 'lucide-react';
 import {
@@ -34,47 +37,43 @@ import {
 } from '../types/ic3';
 import { api } from '../utils/api';
 import {
+  buildQuestionBankExportPackage,
   buildReorderedPartUpdates,
-  collectHotspotStoragePathsToDelete,
+  canBatchToggleKnowledgeParts,
+  filterKnowledgeCategoriesByReadiness,
+  filterKnowledgePartsByReadiness,
+  formatQuestionBankToCsv,
   formatQuestionOrderSummary,
   getNextTopicOrder,
-  getObsoleteHotspotStoragePath,
   getPartQuestionsSorted,
+  isKnowledgeCategoryEnabled,
+  isKnowledgePartEnabled,
+  parseQuestionBankImportInput,
   pickQuestionsBySelectedIds,
   sliceQuestionsByOrderRange,
+  summarizeKnowledgeCategoryReadiness,
+  summarizeKnowledgePartReadiness,
   toggleSelectAllVisibleIds,
 } from '../utils/ic3Rules';
 import {
-  deleteHotspotImagesFromSupabase,
-  deleteKnowledgeCategoryOnSupabase,
-  deleteKnowledgePartOnSupabase,
-  deleteModuleOnSupabase,
-  deleteQuestionAndSyncSetsOnSupabase,
-  deleteQuestionsBatchAndSyncSetsOnSupabase,
-  deleteQuestionSetOnSupabase,
-  fetchQuestionBankFromSupabase,
-  getQuestionBankSupabaseEnabled,
-  isSupabaseConfigured,
-  pushQuestionBankToSupabase,
-  reorderQuestionsOnSupabase,
-  setQuestionBankSupabaseEnabled,
-  syncCategoryWithParentOnSupabase,
-  syncPartWithParentsOnSupabase,
-  syncQuestionWithParentsOnSupabase,
-  upsertModuleOnSupabase,
-  upsertQuestionSetOnSupabase,
-} from '../utils/supabaseClient';
+  buildQuestionBankExcelBuffer,
+  parseQuestionBankExcelSheet,
+  readExcelWorkbookBuffer,
+  type ParsedExcelWorkbookData,
+} from '../utils/ic3Excel';
 import { HotspotCanvas } from './HotspotCanvas';
 import { QuestionEditorModal, type QuestionDefaultContext } from './QuestionEditorModal';
+import { CardGridSkeleton, ListSkeleton } from './TableSkeleton';
 
 interface QuestionBankViewProps {
   db: Omit<AdminDatabase, 'teachers'>;
   canEdit?: boolean;
-  canManageSupabase?: boolean;
+  loading?: boolean;
   onRefresh: () => Promise<void>;
   onNotify: (msg: string, isError?: boolean) => void;
-  onOpenSupabase?: () => void;
 }
+
+const SHOW_QUESTION_BANK_IMPORT_EXPORT: boolean = false;
 
 function getDefaultLevelForModule(mod: IC3Module): IC3Level {
   if (mod === 'computing_fundamentals') return 'LV1';
@@ -86,34 +85,24 @@ function getDefaultLevelForModule(mod: IC3Module): IC3Level {
 export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   db,
   canEdit = true,
-  canManageSupabase = false,
+  loading = false,
   onRefresh,
   onNotify,
-  onOpenSupabase,
 }) => {
   const [subTab, setSubTab] = useState<'questions' | 'sets'>('questions');
-  const [pullingSupabase, setPullingSupabase] = useState(false);
-  const [pushingSupabase, setPushingSupabase] = useState(false);
-  const [serverSupabaseConfigured, setServerSupabaseConfigured] = useState(false);
-  const supabaseReady = isSupabaseConfigured() || serverSupabaseConfigured;
-  const [liveSupabaseEnabled, setLiveSupabaseEnabled] = useState(() =>
-    getQuestionBankSupabaseEnabled()
-  );
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .health()
-      .then((h) => {
-        if (!cancelled) {
-          setServerSupabaseConfigured(Boolean(h.supabaseConfigured));
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [db.questions.length, db.modules?.length]);
+  // Import / Export modal state
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportScopeMode, setExportScopeMode] = useState<'all' | 'current'>('all');
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importFileName, setImportFileName] = useState('');
+  const [importRawText, setImportRawText] = useState('');
+  const [importExcelWorkbook, setImportExcelWorkbook] =
+    useState<ParsedExcelWorkbookData | null>(null);
+  const [importExcelSheet, setImportExcelSheet] = useState('');
+  const [isDraggingImportFile, setIsDraggingImportFile] = useState(false);
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  const [importingBank, setImportingBank] = useState(false);
 
   // 4-step drill-down state
   const [selectedModule, setSelectedModule] = useState<IC3Module | null>(null);
@@ -147,7 +136,11 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   const [savingModule, setSavingModule] = useState(false);
   const [deletingModuleId, setDeletingModuleId] = useState<string | null>(null);
 
-  // Add/Edit Knowledge Category form state
+  // Add/Edit Knowledge Category form & readiness state
+  const [categoryStatusFilter, setCategoryStatusFilter] = useState<
+    'all' | 'enabled' | 'disabled'
+  >('all');
+  const [togglingCategoryKey, setTogglingCategoryKey] = useState<string | null>(null);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
   const [editingCategoryRecord, setEditingCategoryRecord] =
     useState<KnowledgeCategoryRecord | null>(null);
@@ -155,17 +148,26 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     code: '',
     title: '',
     description: '',
+    isEnabled: true,
   });
   const [savingCategory, setSavingCategory] = useState(false);
   const [deletingCategoryId, setDeletingCategoryId] = useState<string | null>(null);
 
-  // Add/Edit Part form state
+  // Add/Edit Part form & readiness state
+  const [partStatusFilter, setPartStatusFilter] = useState<
+    'all' | 'enabled' | 'disabled'
+  >('all');
+  const [togglingPartKey, setTogglingPartKey] = useState<string | null>(null);
+  const [batchTogglingParts, setBatchTogglingParts] = useState<
+    'enable' | 'disable' | null
+  >(null);
   const [showAddPartForm, setShowAddPartForm] = useState(false);
   const [editingPartRecord, setEditingPartRecord] =
     useState<KnowledgePart | null>(null);
   const [newPartCode, setNewPartCode] = useState('');
   const [newPartTitle, setNewPartTitle] = useState('');
   const [newPartDesc, setNewPartDesc] = useState('');
+  const [newPartEnabled, setNewPartEnabled] = useState(true);
   const [savingPart, setSavingPart] = useState(false);
   const [deletingPartId, setDeletingPartId] = useState<string | null>(null);
 
@@ -258,12 +260,36 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
             CATEGORY_LABELS[code]?.description ||
             'Tạo tự động từ dữ liệu phần/câu hỏi hiện có.',
           orderIndex: defined.length + extras.length + 1,
+          isEnabled: true,
         });
       }
     }
 
     return [...defined, ...extras];
   }, [db.knowledgeCategories, knowledgeParts, db.questions, selectedModule]);
+
+  const categoryReadinessSummary = useMemo(
+    () => summarizeKnowledgeCategoryReadiness(currentModuleCategories),
+    [currentModuleCategories]
+  );
+
+  const filteredModuleCategories = useMemo(
+    () =>
+      filterKnowledgeCategoriesByReadiness(
+        currentModuleCategories,
+        categoryStatusFilter
+      ),
+    [currentModuleCategories, categoryStatusFilter]
+  );
+
+  const selectedCategoryRecord = useMemo(() => {
+    if (!selectedCategory) return null;
+    return (
+      currentModuleCategories.find(
+        (c) => c.code.toUpperCase() === selectedCategory.toUpperCase()
+      ) ?? null
+    );
+  }, [currentModuleCategories, selectedCategory]);
 
   // Derive parts for the currently selected (module, category), merging defined parts + any orphan codes in questions
   const currentCategoryParts = useMemo(() => {
@@ -289,12 +315,28 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
           title: `Chuyên đề ${code}`,
           description: 'Tạo tự động từ dữ liệu câu hỏi hiện có.',
           orderIndex: defined.length + extras.length + 1,
+          isEnabled: true,
         });
       }
     }
 
     return [...defined, ...extras];
   }, [knowledgeParts, db.questions, selectedModule, selectedCategory, allModules]);
+
+  const partReadinessSummary = useMemo(
+    () => summarizeKnowledgePartReadiness(currentCategoryParts),
+    [currentCategoryParts]
+  );
+
+  const partBatchToggleState = useMemo(
+    () => canBatchToggleKnowledgeParts(currentCategoryParts),
+    [currentCategoryParts]
+  );
+
+  const filteredCategoryParts = useMemo(
+    () => filterKnowledgePartsByReadiness(currentCategoryParts, partStatusFilter),
+    [currentCategoryParts, partStatusFilter]
+  );
 
   const activePartMeta = useMemo(() => {
     if (!selectedPartCode) return null;
@@ -380,6 +422,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     setSelectedModule(mod);
     setSelectedCategory(null);
     setSelectedPartCode(null);
+    setCategoryStatusFilter('all');
+    setPartStatusFilter('all');
     setShowModuleForm(false);
     setShowCategoryForm(false);
     setShowAddPartForm(false);
@@ -393,6 +437,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   function selectCategory(cat: KnowledgeCategory) {
     setSelectedCategory(cat);
     setSelectedPartCode(null);
+    setPartStatusFilter('all');
     setShowCategoryForm(false);
     setShowAddPartForm(false);
     setEditingPartRecord(null);
@@ -433,115 +478,295 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     }
     if (selectedCategory) {
       setSelectedCategory(null);
+      setPartStatusFilter('all');
       setShowAddPartForm(false);
       setEditingPartRecord(null);
       return;
     }
     if (selectedModule) {
       setSelectedModule(null);
+      setCategoryStatusFilter('all');
+      setPartStatusFilter('all');
       setShowCategoryForm(false);
     }
   }
 
-  const serverDirectSupabase = serverSupabaseConfigured || isSupabaseConfigured();
-
-  async function handlePullFromSupabase() {
-    setPullingSupabase(true);
-    try {
-      if (serverSupabaseConfigured && !isSupabaseConfigured()) {
-        await onRefresh();
-        onNotify('Đã tải lại dữ liệu Ngân hàng Câu hỏi mới nhất trực tiếp từ Supabase.');
-        return;
-      }
-      const pulled = await fetchQuestionBankFromSupabase();
-      if (!pulled.ok) {
-        onNotify(pulled.message, true);
-        return;
-      }
-      if (
-        pulled.modules.length === 0 &&
-        pulled.knowledgeCategories.length === 0 &&
-        pulled.knowledgeParts.length === 0 &&
-        pulled.questions.length === 0 &&
-        pulled.questionSets.length === 0
-      ) {
-        onNotify(
-          'Không đọc được dòng dữ liệu nào từ Supabase (0 dòng). Nếu bạn đã thêm dữ liệu trên Supabase, hãy kiểm tra RLS Policy (cho phép anon SELECT) bằng cách chạy phần SQL phân quyền hoặc kiểm tra đúng Project URL.',
-          true
-        );
-        return;
-      }
-      await api.importQuestionBankFromRemote({
-        modules: pulled.modules,
-        knowledgeCategories: pulled.knowledgeCategories,
-        knowledgeParts: pulled.knowledgeParts,
-        questions: pulled.questions,
-        questionSets: pulled.questionSets,
+  const parsedImport = useMemo(() => {
+    if (importExcelWorkbook) {
+      return parseQuestionBankExcelSheet(importExcelWorkbook, importExcelSheet, {
+        module: selectedModule ?? undefined,
+        level: selectedModule ? getLevelForModule(selectedModule) : undefined,
+        category: selectedCategory ?? undefined,
+        contentCode: selectedPartCode ?? undefined,
       });
-      setQuestionBankSupabaseEnabled(true);
-      setLiveSupabaseEnabled(true);
-      if (
-        selectedModule &&
-        !pulled.modules.some((m) => m.code === selectedModule) &&
-        !pulled.questions.some((q) => q.module === selectedModule)
-      ) {
+    }
+    if (!importRawText.trim()) return null;
+    return parseQuestionBankImportInput(importRawText, importFileName);
+  }, [
+    importExcelWorkbook,
+    importExcelSheet,
+    importRawText,
+    importFileName,
+    selectedModule,
+    selectedCategory,
+    selectedPartCode,
+    allModules,
+  ]);
+
+  function triggerDownload(filename: string, content: BlobPart, mimeType: string) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleOpenExportModal() {
+    setExportScopeMode(selectedModule ? 'current' : 'all');
+    setShowExportModal(true);
+  }
+
+  function handleExportFile(format: 'xlsx' | 'json' | 'csv') {
+    const scope =
+      exportScopeMode === 'current' && selectedModule
+        ? {
+            module: selectedModule,
+            category: selectedCategory ?? undefined,
+            contentCode: selectedPartCode ?? undefined,
+          }
+        : undefined;
+    const pkg = buildQuestionBankExportPackage(db, scope);
+    if (pkg.questions.length === 0 && pkg.modules.length === 0) {
+      onNotify('Không có dữ liệu câu hỏi trong phạm vi đã chọn để xuất.', true);
+      return;
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    const suffix =
+      exportScopeMode === 'current' && selectedModule
+        ? `${selectedPartCode || selectedCategory || selectedModule}`.toLowerCase()
+        : 'full';
+    if (format === 'xlsx') {
+      const xlsxBytes = buildQuestionBankExcelBuffer(pkg, 'export');
+      triggerDownload(
+        `ic3-question-bank-${suffix}-${stamp}.xlsx`,
+        xlsxBytes as unknown as BlobPart,
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      onNotify(
+        `Đã xuất ${pkg.questions.length} câu hỏi ra tệp Excel (.xlsx).`
+      );
+    } else if (format === 'json') {
+      triggerDownload(
+        `ic3-question-bank-${suffix}-${stamp}.json`,
+        JSON.stringify(pkg, null, 2),
+        'application/json;charset=utf-8'
+      );
+      onNotify(
+        `Đã xuất ${pkg.questions.length} câu hỏi và ${pkg.questionSets.length} bộ đề ra tệp JSON.`
+      );
+    } else {
+      triggerDownload(
+        `ic3-question-bank-${suffix}-${stamp}.csv`,
+        formatQuestionBankToCsv(pkg.questions),
+        'text/csv;charset=utf-8'
+      );
+      onNotify(`Đã xuất ${pkg.questions.length} câu hỏi ra tệp CSV (UTF-8).`);
+    }
+    setShowExportModal(false);
+  }
+
+  function handleDownloadSampleFile(format: 'xlsx' | 'json' | 'csv') {
+    const sampleQuestions: Question[] = [
+      {
+        id: 'q_sample_single_01',
+        module: selectedModule ?? 'computing_fundamentals',
+        level: selectedModule ? getLevelForModule(selectedModule) : 'LV1',
+        category: selectedCategory ?? 'GM',
+        contentCode: selectedPartCode ?? 'GM1',
+        topicOrder: 1,
+        topic: 'Câu hỏi mẫu nhập liệu',
+        type: 'single',
+        prompt: 'Phím tắt nào dùng để sao chép văn bản hoặc tệp tin đang chọn?',
+        instruction: 'Chọn một đáp án đúng nhất.',
+        payload: {
+          options: [
+            { id: 'a', text: 'Ctrl + C' },
+            { id: 'b', text: 'Ctrl + V' },
+            { id: 'c', text: 'Ctrl + X' },
+            { id: 'd', text: 'Ctrl + Z' },
+          ],
+          correctOptionId: 'a',
+        },
+        explanation: 'Ctrl + C sao chép đối tượng vào Clipboard.',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: 'q_sample_tf_02',
+        module: selectedModule ?? 'computing_fundamentals',
+        level: selectedModule ? getLevelForModule(selectedModule) : 'LV1',
+        category: selectedCategory ?? 'GM',
+        contentCode: selectedPartCode ?? 'GM1',
+        topicOrder: 2,
+        topic: 'Câu hỏi mẫu nhập liệu',
+        type: 'true_false',
+        prompt: 'Xác định Đúng hoặc Sai cho từng phát biểu về thiết bị lưu trữ:',
+        instruction: 'Chọn Đúng hoặc Sai cho mỗi ý bên dưới.',
+        payload: {
+          statements: [
+            {
+              id: 's1',
+              text: 'Ổ cứng SSD đọc ghi nhanh hơn ổ cứng HDD truyền thống.',
+              isTrue: true,
+            },
+            {
+              id: 's2',
+              text: 'RAM vẫn giữ toàn bộ dữ liệu sau khi tắt nguồn hoàn toàn.',
+              isTrue: false,
+            },
+          ],
+        },
+        explanation: 'RAM là bộ nhớ khả biến, dữ liệu sẽ mất khi tắt nguồn.',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+    if (format === 'xlsx') {
+      const emptyPkg = buildQuestionBankExportPackage({
+        modules: db.modules,
+        knowledgeCategories: db.knowledgeCategories,
+        knowledgeParts: db.knowledgeParts,
+        questions: [],
+        questionSets: [],
+      });
+      const xlsxBytes = buildQuestionBankExcelBuffer(emptyPkg, 'template', {
+        module: selectedModule ?? undefined,
+        level: selectedModule ? getLevelForModule(selectedModule) : undefined,
+        category: selectedCategory ?? undefined,
+        contentCode: selectedPartCode ?? undefined,
+      });
+      triggerDownload(
+        'ic3-question-bank-sample.xlsx',
+        xlsxBytes as unknown as BlobPart,
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+    } else if (format === 'json') {
+      const samplePkg = buildQuestionBankExportPackage({
+        modules: db.modules,
+        knowledgeCategories: db.knowledgeCategories,
+        knowledgeParts: db.knowledgeParts,
+        questions: sampleQuestions,
+        questionSets: [],
+      });
+      triggerDownload(
+        'ic3-question-bank-sample.json',
+        JSON.stringify(samplePkg, null, 2),
+        'application/json;charset=utf-8'
+      );
+    } else {
+      triggerDownload(
+        'ic3-question-bank-sample.csv',
+        formatQuestionBankToCsv(sampleQuestions),
+        'text/csv;charset=utf-8'
+      );
+    }
+  }
+
+  async function processImportFile(file: File) {
+    const lower = file.name.toLowerCase();
+    try {
+      if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+        const buffer = await file.arrayBuffer();
+        const workbook = readExcelWorkbookBuffer(buffer);
+        setImportExcelWorkbook(workbook);
+        setImportExcelSheet(workbook.activeSheetName);
+        setImportRawText('');
+        setImportFileName(file.name);
+        return;
+      }
+      const text = await file.text();
+      setImportExcelWorkbook(null);
+      setImportExcelSheet('');
+      setImportFileName(file.name);
+      setImportRawText(text);
+    } catch {
+      onNotify(
+        'Không đọc được tệp đã chọn. Hãy kiểm tra đúng định dạng .xlsx, .xls, .json hoặc .csv.',
+        true
+      );
+    }
+  }
+
+  async function handleSelectImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processImportFile(file);
+    e.target.value = '';
+  }
+
+  async function handleDropImportFile(e: React.DragEvent<HTMLLabelElement>) {
+    e.preventDefault();
+    setIsDraggingImportFile(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      await processImportFile(file);
+    }
+  }
+
+  async function handleConfirmImport() {
+    if (!parsedImport) {
+      onNotify('Vui lòng chọn file Excel/JSON/CSV hoặc dán dữ liệu câu hỏi cần nhập.', true);
+      return;
+    }
+    if (parsedImport.errors.length > 0) {
+      onNotify(parsedImport.errors[0], true);
+      return;
+    }
+    if (
+      parsedImport.bundle.questions.length === 0 &&
+      parsedImport.bundle.modules.length === 0
+    ) {
+      onNotify('Không có câu hỏi hợp lệ nào để nhập.', true);
+      return;
+    }
+    setImportingBank(true);
+    try {
+      const res = await api.importQuestionBankFromRemote({
+        modules: parsedImport.bundle.modules,
+        knowledgeCategories: parsedImport.bundle.knowledgeCategories,
+        knowledgeParts: parsedImport.bundle.knowledgeParts,
+        questions: parsedImport.bundle.questions,
+        questionSets: parsedImport.bundle.questionSets,
+        mode: importMode,
+      });
+      if (importMode === 'replace') {
         setSelectedModule(null);
         setSelectedCategory(null);
         setSelectedPartCode(null);
       }
+      setShowImportModal(false);
+      setImportFileName('');
+      setImportRawText('');
+      setImportExcelWorkbook(null);
+      setImportExcelSheet('');
       await onRefresh();
-      onNotify(pulled.message);
+      onNotify(
+        importMode === 'replace'
+          ? `Đã thay thế Ngân hàng Câu hỏi (${res.counts.questions} câu hỏi, ${res.counts.questionSets} bộ đề).`
+          : `Đã nhập & gộp ${parsedImport.bundle.questions.length} câu hỏi vào Ngân hàng Câu hỏi.`
+      );
     } catch (err) {
       onNotify(
-        err instanceof Error ? err.message : 'Không thể lấy CSDL Ngân hàng Câu hỏi từ Supabase.',
+        err instanceof Error ? err.message : 'Không thể nhập Ngân hàng Câu hỏi.',
         true
       );
     } finally {
-      setPullingSupabase(false);
+      setImportingBank(false);
     }
-  }
-
-  async function handlePushToSupabase() {
-    setPushingSupabase(true);
-    try {
-      if (serverSupabaseConfigured && !isSupabaseConfigured()) {
-        const res = await api.seedDatabaseToSupabase({ useSeedSample: false });
-        if (res.ok) {
-          await onRefresh();
-        }
-        onNotify(res.message, !res.ok);
-        return;
-      }
-      const res = await pushQuestionBankToSupabase({
-        modules: db.modules,
-        knowledgeCategories: db.knowledgeCategories,
-        knowledgeParts: db.knowledgeParts,
-        questions: db.questions,
-        questionSets: db.questionSets,
-      });
-      if (res.ok) {
-        setQuestionBankSupabaseEnabled(true);
-        setLiveSupabaseEnabled(true);
-      }
-      onNotify(res.message, !res.ok);
-    } catch (err) {
-      onNotify(
-        err instanceof Error ? err.message : 'Không thể đẩy Ngân hàng Câu hỏi lên Supabase.',
-        true
-      );
-    } finally {
-      setPushingSupabase(false);
-    }
-  }
-
-  function handleToggleLiveSupabase(next: boolean) {
-    setQuestionBankSupabaseEnabled(next);
-    setLiveSupabaseEnabled(next);
-    onNotify(
-      next
-        ? 'Đã bật tự động đồng bộ 2 chiều Ngân hàng Câu hỏi với Supabase.'
-        : 'Đã tạm tắt tự động đồng bộ Supabase cho Ngân hàng Câu hỏi.'
-    );
   }
 
   function openNewModuleForm() {
@@ -581,41 +806,28 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     }
     setSavingModule(true);
     try {
-      const saved = editingModuleRecord
-        ? await api.updateModule(editingModuleRecord.id, {
-            level,
-            title,
-            description: moduleForm.description.trim(),
-          })
-        : await api.createModule({
-            level,
-            code,
-            title,
-            description: moduleForm.description.trim(),
-          });
-      let syncErr: string | null = null;
-      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
-        try {
-          await upsertModuleOnSupabase(saved);
-        } catch (e2) {
-          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-        }
+      if (editingModuleRecord) {
+        await api.updateModule(editingModuleRecord.id, {
+          level,
+          title,
+          description: moduleForm.description.trim(),
+        });
+      } else {
+        await api.createModule({
+          level,
+          code,
+          title,
+          description: moduleForm.description.trim(),
+        });
       }
       setShowModuleForm(false);
       setEditingModuleRecord(null);
       await onRefresh();
-      if (syncErr) {
-        onNotify(
-          `Đã lưu cục bộ mô-đun ${level}, nhưng lỗi đồng bộ Supabase: ${syncErr}`,
-          true
-        );
-      } else {
-        onNotify(
-          editingModuleRecord
-            ? `Đã cập nhật Mô-đun ${level}.`
-            : `Đã thêm Mô-đun ${level} mới.`
-        );
-      }
+      onNotify(
+        editingModuleRecord
+          ? `Đã cập nhật Mô-đun ${level}.`
+          : `Đã thêm Mô-đun ${level} mới.`
+      );
     } catch (err) {
       onNotify(
         err instanceof Error ? err.message : 'Không thể lưu Mô-đun.',
@@ -630,23 +842,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     setDeletingModuleId(mod.id);
     try {
       await api.deleteModule(mod.id);
-      let syncErr: string | null = null;
-      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
-        try {
-          await deleteModuleOnSupabase(mod);
-        } catch (e2) {
-          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-        }
-      }
       await onRefresh();
-      if (syncErr) {
-        onNotify(
-          `Đã xóa cục bộ mô-đun ${mod.level}, nhưng lỗi đồng bộ Supabase: ${syncErr}`,
-          true
-        );
-      } else {
-        onNotify(`Đã xóa Mô-đun ${mod.level}.`);
-      }
+      onNotify(`Đã xóa Mô-đun ${mod.level}.`);
     } catch (err) {
       onNotify(
         err instanceof Error ? err.message : 'Không thể xóa Mô-đun này.',
@@ -663,6 +860,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
       code: '',
       title: '',
       description: '',
+      isEnabled: true,
     });
     setShowCategoryForm(true);
   }
@@ -673,6 +871,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
       code: cat.code,
       title: cat.title,
       description: cat.description,
+      isEnabled: isKnowledgeCategoryEnabled(cat),
     });
     setShowCategoryForm(true);
   }
@@ -688,41 +887,29 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     }
     setSavingCategory(true);
     try {
-      const saved = editingCategoryRecord
-        ? await api.updateKnowledgeCategory(editingCategoryRecord.id, {
-            title,
-            description: categoryForm.description.trim(),
-          })
-        : await api.createKnowledgeCategory({
-            module: selectedModule,
-            code,
-            title,
-            description: categoryForm.description.trim(),
-          });
-      let syncErr: string | null = null;
-      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
-        try {
-          const parentMod = allModules.find((m) => m.code === saved.module);
-          await syncCategoryWithParentOnSupabase(parentMod, saved);
-        } catch (e2) {
-          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-        }
+      if (editingCategoryRecord) {
+        await api.updateKnowledgeCategory(editingCategoryRecord.id, {
+          title,
+          description: categoryForm.description.trim(),
+          isEnabled: categoryForm.isEnabled,
+        });
+      } else {
+        await api.createKnowledgeCategory({
+          module: selectedModule,
+          code,
+          title,
+          description: categoryForm.description.trim(),
+          isEnabled: categoryForm.isEnabled,
+        });
       }
       setShowCategoryForm(false);
       setEditingCategoryRecord(null);
       await onRefresh();
-      if (syncErr) {
-        onNotify(
-          `Đã lưu cục bộ nhóm ${code}, nhưng lỗi đồng bộ Supabase: ${syncErr}`,
-          true
-        );
-      } else {
-        onNotify(
-          editingCategoryRecord
-            ? `Đã cập nhật nhóm kiến thức ${code}.`
-            : `Đã thêm nhóm kiến thức ${code}.`
-        );
-      }
+      onNotify(
+        editingCategoryRecord
+          ? `Đã cập nhật nhóm kiến thức ${code}.`
+          : `Đã thêm nhóm kiến thức ${code}.`
+      );
     } catch (err) {
       onNotify(
         err instanceof Error ? err.message : 'Không thể lưu nhóm kiến thức.',
@@ -733,27 +920,49 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     }
   }
 
+  async function handleToggleCategoryReadiness(cat: KnowledgeCategoryRecord) {
+    if (!canEdit || !selectedModule || togglingCategoryKey) return;
+    const nextEnabled = !isKnowledgeCategoryEnabled(cat);
+    const toggleKey = `${cat.module}:${cat.code}`;
+    setTogglingCategoryKey(toggleKey);
+    try {
+      if (cat.id.startsWith('virtual_cat_')) {
+        await api.createKnowledgeCategory({
+          module: selectedModule,
+          code: cat.code,
+          title: cat.title,
+          description: cat.description,
+          isEnabled: nextEnabled,
+        });
+      } else {
+        await api.updateKnowledgeCategory(cat.id, {
+          isEnabled: nextEnabled,
+        });
+      }
+      await onRefresh();
+      onNotify(
+        nextEnabled
+          ? `Đã bật nhóm ${cat.code} sẵn sàng cho học sinh làm bài.`
+          : `Đã tạm tắt nhóm ${cat.code} (chưa mở cho học sinh làm bài).`
+      );
+    } catch (err) {
+      onNotify(
+        err instanceof Error
+          ? err.message
+          : 'Không thể cập nhật trạng thái sẵn sàng của nhóm kiến thức.',
+        true
+      );
+    } finally {
+      setTogglingCategoryKey(null);
+    }
+  }
+
   async function handleDeleteCategory(cat: KnowledgeCategoryRecord) {
     setDeletingCategoryId(cat.id);
     try {
       await api.deleteKnowledgeCategory(cat.id);
-      let syncErr: string | null = null;
-      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
-        try {
-          await deleteKnowledgeCategoryOnSupabase(cat);
-        } catch (e2) {
-          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-        }
-      }
       await onRefresh();
-      if (syncErr) {
-        onNotify(
-          `Đã xóa cục bộ nhóm ${cat.code}, nhưng lỗi đồng bộ Supabase: ${syncErr}`,
-          true
-        );
-      } else {
-        onNotify(`Đã xóa nhóm kiến thức ${cat.code}.`);
-      }
+      onNotify(`Đã xóa nhóm kiến thức ${cat.code}.`);
     } catch (err) {
       onNotify(
         err instanceof Error ? err.message : 'Không thể xóa nhóm kiến thức này.',
@@ -771,6 +980,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     setNewPartCode(`${selectedCategory}${nextIdx}`);
     setNewPartTitle('');
     setNewPartDesc('');
+    setNewPartEnabled(true);
     setShowAddPartForm(true);
   }
 
@@ -779,6 +989,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     setNewPartCode(part.code);
     setNewPartTitle(part.title);
     setNewPartDesc(part.description);
+    setNewPartEnabled(isKnowledgePartEnabled(part));
     setShowAddPartForm(true);
   }
 
@@ -793,49 +1004,36 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     }
     setSavingPart(true);
     try {
-      const saved = editingPartRecord
-        ? await api.updateKnowledgePart(editingPartRecord.id, {
-            title,
-            description: newPartDesc.trim(),
-          })
-        : await api.createKnowledgePart({
-            module: selectedModule,
-            level: getLevelForModule(selectedModule),
-            category: selectedCategory,
-            code,
-            title,
-            description: newPartDesc.trim(),
-          });
-      let syncErr: string | null = null;
-      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
-        try {
-          const parentMod = allModules.find((m) => m.code === saved.module);
-          const parentCat = (db.knowledgeCategories ?? []).find(
-            (c) =>
-              c.module === saved.module &&
-              c.code.toUpperCase() === saved.category.toUpperCase()
-          );
-          await syncPartWithParentsOnSupabase(parentMod, parentCat, saved);
-        } catch (e2) {
-          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-        }
+      if (editingPartRecord) {
+        await api.updateKnowledgePart(editingPartRecord.id, {
+          title,
+          description: newPartDesc.trim(),
+          isEnabled: newPartEnabled,
+        });
+      } else {
+        await api.createKnowledgePart({
+          module: selectedModule,
+          level: getLevelForModule(selectedModule),
+          category: selectedCategory,
+          code,
+          title,
+          description: newPartDesc.trim(),
+          isEnabled: newPartEnabled,
+        });
       }
       const wasEditing = Boolean(editingPartRecord);
       setNewPartCode('');
       setNewPartTitle('');
       setNewPartDesc('');
+      setNewPartEnabled(true);
       setEditingPartRecord(null);
       setShowAddPartForm(false);
       await onRefresh();
-      if (syncErr) {
-        onNotify(`Đã lưu cục bộ phần ${code}, nhưng lỗi đồng bộ Supabase: ${syncErr}`, true);
-      } else {
-        onNotify(
-          wasEditing
-            ? `Đã cập nhật phần kiến thức ${code}.`
-            : `Đã thêm phần kiến thức ${code}.`
-        );
-      }
+      onNotify(
+        wasEditing
+          ? `Đã cập nhật phần kiến thức ${code}.`
+          : `Đã thêm phần kiến thức ${code}.`
+      );
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Không thể lưu phần kiến thức.', true);
     } finally {
@@ -843,24 +1041,105 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     }
   }
 
+  async function handleTogglePartReadiness(part: KnowledgePart) {
+    if (
+      !canEdit ||
+      !selectedModule ||
+      !selectedCategory ||
+      togglingPartKey ||
+      batchTogglingParts
+    ) {
+      return;
+    }
+    const nextEnabled = !isKnowledgePartEnabled(part);
+    const toggleKey = `${part.module}:${part.category}:${part.code}`;
+    setTogglingPartKey(toggleKey);
+    try {
+      if (part.id.startsWith('virtual_')) {
+        await api.createKnowledgePart({
+          module: selectedModule,
+          level: getLevelForModule(selectedModule),
+          category: selectedCategory,
+          code: part.code,
+          title: part.title,
+          description: part.description,
+          isEnabled: nextEnabled,
+        });
+      } else {
+        await api.updateKnowledgePart(part.id, {
+          isEnabled: nextEnabled,
+        });
+      }
+      await onRefresh();
+      onNotify(
+        nextEnabled
+          ? `Đã bật phần ${part.code} sẵn sàng cho học sinh làm bài.`
+          : `Đã tạm tắt phần ${part.code} (chưa mở cho học sinh làm bài).`
+      );
+    } catch (err) {
+      onNotify(
+        err instanceof Error
+          ? err.message
+          : 'Không thể cập nhật trạng thái sẵn sàng của phần kiến thức.',
+        true
+      );
+    } finally {
+      setTogglingPartKey(null);
+    }
+  }
+
+  async function handleBatchToggleCategoryParts(nextEnabled: boolean) {
+    if (
+      !canEdit ||
+      !selectedModule ||
+      !selectedCategory ||
+      currentCategoryParts.length === 0 ||
+      batchTogglingParts ||
+      togglingPartKey
+    ) {
+      return;
+    }
+    setBatchTogglingParts(nextEnabled ? 'enable' : 'disable');
+    try {
+      const virtualParts = currentCategoryParts
+        .filter((p) => p.id.startsWith('virtual_'))
+        .map((p) => ({
+          code: p.code,
+          title: p.title,
+          description: p.description,
+        }));
+      const res = await api.batchToggleKnowledgePartsReadiness({
+        module: selectedModule,
+        level: getLevelForModule(selectedModule),
+        category: selectedCategory,
+        isEnabled: nextEnabled,
+        virtualParts: virtualParts.length > 0 ? virtualParts : undefined,
+      });
+      await onRefresh();
+      const count = res.updatedCount || currentCategoryParts.length;
+      onNotify(
+        nextEnabled
+          ? `Đã bật tất cả ${count} phần của nhóm ${selectedCategory} sẵn sàng cho học sinh làm bài.`
+          : `Đã tạm tắt tất cả ${count} phần của nhóm ${selectedCategory} (chưa mở cho học sinh).`
+      );
+    } catch (err) {
+      onNotify(
+        err instanceof Error
+          ? err.message
+          : 'Không thể cập nhật hàng loạt trạng thái sẵn sàng cho các phần.',
+        true
+      );
+    } finally {
+      setBatchTogglingParts(null);
+    }
+  }
+
   async function handleDeletePart(part: KnowledgePart) {
     setDeletingPartId(part.id);
     try {
       await api.deleteKnowledgePart(part.id);
-      let syncErr: string | null = null;
-      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
-        try {
-          await deleteKnowledgePartOnSupabase(part);
-        } catch (e2) {
-          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-        }
-      }
       await onRefresh();
-      if (syncErr) {
-        onNotify(`Đã xóa cục bộ phần ${part.code}, nhưng lỗi đồng bộ Supabase: ${syncErr}`, true);
-      } else {
-        onNotify(`Đã xóa phần ${part.code}.`);
-      }
+      onNotify(`Đã xóa phần ${part.code}.`);
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Không thể xóa phần này.', true);
     } finally {
@@ -872,96 +1151,22 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     payload: Omit<Question, 'id' | 'createdAt' | 'updatedAt'>,
     existingId?: string
   ) {
-    const prevQuestion = existingId
-      ? db.questions.find((item) => item.id === existingId)
-      : undefined;
-    const prevImageUrl =
-      prevQuestion && 'imageUrl' in prevQuestion.payload
-        ? prevQuestion.payload.imageUrl
-        : undefined;
-    const nextImageUrl =
-      'imageUrl' in payload.payload ? payload.payload.imageUrl : undefined;
-
-    const saved = existingId
-      ? await api.updateQuestion(existingId, payload)
-      : await api.createQuestion(payload);
-
-    let syncErr: string | null = null;
-    let storageCleanupErr: string | null = null;
-    if (!serverDirectSupabase) {
-      if (getQuestionBankSupabaseEnabled()) {
-        try {
-          const freshDb = await api.bootstrap();
-          await syncQuestionWithParentsOnSupabase(freshDb, saved);
-        } catch (e2) {
-          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-        }
-      }
-
-      const otherQuestions = db.questions.filter((item) => item.id !== saved.id);
-      const obsoleteStoragePath = getObsoleteHotspotStoragePath(
-        prevImageUrl,
-        nextImageUrl,
-        otherQuestions
-      );
-      if (obsoleteStoragePath && isSupabaseConfigured()) {
-        const removed = await deleteHotspotImagesFromSupabase([obsoleteStoragePath]);
-        if (!removed.ok) {
-          storageCleanupErr = removed.message || 'Không xóa được ảnh cũ khỏi Storage';
-        }
-      }
-    }
-
-    await onRefresh();
-    if (syncErr || storageCleanupErr) {
-      const details = [syncErr, storageCleanupErr].filter(Boolean).join('; ');
-      onNotify(`Đã lưu câu hỏi nhưng gặp lỗi đồng bộ Supabase: ${details}`, true);
+    if (existingId) {
+      await api.updateQuestion(existingId, payload);
     } else {
-      onNotify(existingId ? 'Đã cập nhật câu hỏi.' : 'Đã thêm câu hỏi mới vào phần kiến thức.');
+      await api.createQuestion(payload);
     }
+    await onRefresh();
+    onNotify(existingId ? 'Đã cập nhật câu hỏi.' : 'Đã thêm câu hỏi mới vào phần kiến thức.');
   }
 
   async function handleDeleteQuestion(q: Question) {
     setDeletingQuestionId(q.id);
     try {
-      const remainingQuestions = db.questions.filter((item) => item.id !== q.id);
-      const storagePathsToDelete = collectHotspotStoragePathsToDelete(
-        [q],
-        remainingQuestions
-      );
-      const updatedAffectedSets = db.questionSets
-        .filter((s) => s.questionIds.includes(q.id))
-        .map((s) => ({
-          ...s,
-          questionIds: s.questionIds.filter((id) => id !== q.id),
-          updatedAt: new Date().toISOString(),
-        }));
       await api.deleteQuestion(q.id);
-      let syncErr: string | null = null;
-      let storageCleanupErr: string | null = null;
-      if (!serverDirectSupabase) {
-        if (getQuestionBankSupabaseEnabled()) {
-          try {
-            await deleteQuestionAndSyncSetsOnSupabase(q.id, updatedAffectedSets);
-          } catch (e2) {
-            syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-          }
-        }
-        if (storagePathsToDelete.length > 0 && isSupabaseConfigured()) {
-          const removed = await deleteHotspotImagesFromSupabase(storagePathsToDelete);
-          if (!removed.ok) {
-            storageCleanupErr = removed.message || 'Không xóa được ảnh khỏi Storage';
-          }
-        }
-      }
       setSelectedQuestionIds((prev) => prev.filter((id) => id !== q.id));
       await onRefresh();
-      if (syncErr || storageCleanupErr) {
-        const details = [syncErr, storageCleanupErr].filter(Boolean).join('; ');
-        onNotify(`Đã xóa cục bộ Câu ${q.topicOrder}, nhưng lỗi đồng bộ Supabase: ${details}`, true);
-      } else {
-        onNotify(`Đã xóa Câu ${q.topicOrder}.`);
-      }
+      onNotify(`Đã xóa Câu ${q.topicOrder}.`);
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Lỗi xóa câu hỏi.', true);
     } finally {
@@ -991,51 +1196,13 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   async function handleBatchDeleteSelectedQuestions() {
     const ids = activeSelectedQuestions.map((q) => q.id);
     if (ids.length === 0) return;
-    const idSet = new Set(ids);
-    const remainingQuestions = db.questions.filter((item) => !idSet.has(item.id));
-    const storagePathsToDelete = collectHotspotStoragePathsToDelete(
-      activeSelectedQuestions,
-      remainingQuestions
-    );
     setDeletingBatchQuestions(true);
     try {
-      const updatedAffectedSets = db.questionSets
-        .filter((s) => s.questionIds.some((id) => idSet.has(id)))
-        .map((s) => ({
-          ...s,
-          questionIds: s.questionIds.filter((id) => !idSet.has(id)),
-          updatedAt: new Date().toISOString(),
-        }));
       await api.batchDeleteQuestions(ids);
-      let syncErr: string | null = null;
-      let storageCleanupErr: string | null = null;
-      if (!serverDirectSupabase) {
-        if (getQuestionBankSupabaseEnabled()) {
-          try {
-            await deleteQuestionsBatchAndSyncSetsOnSupabase(ids, updatedAffectedSets);
-          } catch (e2) {
-            syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-          }
-        }
-        if (storagePathsToDelete.length > 0 && isSupabaseConfigured()) {
-          const removed = await deleteHotspotImagesFromSupabase(storagePathsToDelete);
-          if (!removed.ok) {
-            storageCleanupErr = removed.message || 'Không xóa được ảnh khỏi Storage';
-          }
-        }
-      }
       setSelectedQuestionIds([]);
       setConfirmBatchDelete(false);
       await onRefresh();
-      if (syncErr || storageCleanupErr) {
-        const details = [syncErr, storageCleanupErr].filter(Boolean).join('; ');
-        onNotify(
-          `Đã xóa cục bộ ${ids.length} câu hỏi, nhưng lỗi đồng bộ Supabase: ${details}`,
-          true
-        );
-      } else {
-        onNotify(`Đã xóa ${ids.length} câu hỏi đã chọn.`);
-      }
+      onNotify(`Đã xóa ${ids.length} câu hỏi đã chọn.`);
     } catch (err) {
       onNotify(
         err instanceof Error ? err.message : 'Lỗi xóa hàng loạt câu hỏi.',
@@ -1078,20 +1245,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     setMovingQuestionId(q.id);
     try {
       await api.reorderQuestions(updates);
-      let syncErr: string | null = null;
-      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
-        try {
-          await reorderQuestionsOnSupabase(updates);
-        } catch (e2) {
-          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-        }
-      }
       await onRefresh();
-      if (syncErr) {
-        onNotify(`Đã cập nhật thứ tự cục bộ, nhưng lỗi đồng bộ Supabase: ${syncErr}`, true);
-      } else {
-        onNotify('Đã cập nhật số thứ tự câu hỏi trong phần.');
-      }
+      onNotify('Đã cập nhật số thứ tự câu hỏi trong phần.');
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Không thể đổi thứ tự câu hỏi.', true);
     } finally {
@@ -1160,31 +1315,18 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     e.preventDefault();
     setSavingSet(true);
     try {
-      const saved = editingSet
-        ? await api.updateQuestionSet(editingSet.id, setForm)
-        : await api.createQuestionSet(setForm);
-      let syncErr: string | null = null;
-      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
-        try {
-          await upsertQuestionSetOnSupabase(saved);
-        } catch (e2) {
-          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-        }
+      if (editingSet) {
+        await api.updateQuestionSet(editingSet.id, setForm);
+      } else {
+        await api.createQuestionSet(setForm);
       }
       await onRefresh();
       setShowSetModal(false);
-      if (syncErr) {
-        onNotify(
-          `Đã lưu cục bộ bộ đề "${setForm.title}", nhưng lỗi đồng bộ Supabase: ${syncErr}`,
-          true
-        );
-      } else {
-        onNotify(
-          editingSet
-            ? `Đã cập nhật bộ đề "${setForm.title}".`
-            : `Đã tạo bộ đề "${setForm.title}".`
-        );
-      }
+      onNotify(
+        editingSet
+          ? `Đã cập nhật bộ đề "${setForm.title}".`
+          : `Đã tạo bộ đề "${setForm.title}".`
+      );
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Lỗi lưu bộ đề.', true);
     } finally {
@@ -1196,23 +1338,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     setDeletingSetId(set.id);
     try {
       await api.deleteQuestionSet(set.id);
-      let syncErr: string | null = null;
-      if (!serverDirectSupabase && getQuestionBankSupabaseEnabled()) {
-        try {
-          await deleteQuestionSetOnSupabase(set.id);
-        } catch (e2) {
-          syncErr = e2 instanceof Error ? e2.message : 'Lỗi đồng bộ Supabase';
-        }
-      }
       await onRefresh();
-      if (syncErr) {
-        onNotify(
-          `Đã xóa cục bộ bộ đề "${set.title}", nhưng lỗi đồng bộ Supabase: ${syncErr}`,
-          true
-        );
-      } else {
-        onNotify(`Đã xóa bộ đề "${set.title}".`);
-      }
+      onNotify(`Đã xóa bộ đề "${set.title}".`);
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Lỗi xóa bộ đề.', true);
     } finally {
@@ -1250,55 +1377,29 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {canEdit && (supabaseReady ? (
+          {SHOW_QUESTION_BANK_IMPORT_EXPORT && (
             <>
-              <label className="inline-flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 whitespace-nowrap shrink-0 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={liveSupabaseEnabled}
-                  onChange={(e) => handleToggleLiveSupabase(e.target.checked)}
-                />
-                <span>Tự động đồng bộ Supabase</span>
-              </label>
               <button
                 type="button"
-                disabled={pullingSupabase || pushingSupabase}
-                onClick={handlePullFromSupabase}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                {pullingSupabase ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 dark:text-emerald-400" />
-                ) : (
-                  <DownloadCloud className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                )}
-                <span>{pullingSupabase ? 'Đang lấy...' : 'Lấy từ Supabase'}</span>
-              </button>
-              <button
-                type="button"
-                disabled={pushingSupabase || pullingSupabase}
-                onClick={handlePushToSupabase}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                {pushingSupabase ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600 dark:text-blue-400" />
-                ) : (
-                  <UploadCloud className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                )}
-                <span>{pushingSupabase ? 'Đang đẩy...' : 'Đẩy lên Supabase'}</span>
-              </button>
-            </>
-          ) : (
-            canManageSupabase && onOpenSupabase && (
-              <button
-                type="button"
-                onClick={onOpenSupabase}
+                onClick={handleOpenExportModal}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <Database className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                <span>Kết nối CSDL Supabase</span>
+                <Download className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>Xuất ngân hàng</span>
               </button>
-            )
-          ))}
+
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={() => setShowImportModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                  <span>Nhập Excel / File</span>
+                </button>
+              )}
+            </>
+          )}
 
           {canEdit && (subTab === 'questions' ? (
             <>
@@ -1384,6 +1485,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                     setSelectedModule(null);
                     setSelectedCategory(null);
                     setSelectedPartCode(null);
+                    setCategoryStatusFilter('all');
                     setShowCategoryForm(false);
                     setShowAddPartForm(false);
                   }}
@@ -1461,7 +1563,14 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {loading ? (
+                <CardGridSkeleton
+                  count={3}
+                  columnsClassName="grid-cols-1 md:grid-cols-3 gap-4"
+                  ariaLabel="Đang tải danh sách mô-đun..."
+                />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {allModules.map((item) => {
                   const modQuestions = db.questions.filter((q) => q.module === item.code);
                   const modParts = knowledgeParts.filter((p) => p.module === item.code);
@@ -1511,10 +1620,16 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                         <div className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums pt-1">
                           {catCodesForSummary.length > 0
                             ? catCodesForSummary
-                                .map(
-                                  (code) =>
-                                    `${code} (${modQuestions.filter((q) => q.category === code).length})`
-                                )
+                                .map((code) => {
+                                  const catRec = modCats.find(
+                                    (c) => c.code.toUpperCase() === code.toUpperCase()
+                                  );
+                                  const offSuffix =
+                                    catRec && !isKnowledgeCategoryEnabled(catRec)
+                                      ? ' · Tạm tắt'
+                                      : '';
+                                  return `${code} (${modQuestions.filter((q) => q.category === code).length}${offSuffix})`;
+                                })
                                 .join(' · ')
                             : 'Chưa có nhóm kiến thức'}
                         </div>
@@ -1562,23 +1677,91 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                     </article>
                   );
                 })}
-              </div>
+                </div>
+              )}
             </section>
           )}
 
           {/* STEP 2: Knowledge Categories (GM, OT, custom...) of selected Module */}
           {selectedModule && !selectedCategory && (
             <section aria-label="Chọn Nhóm kiến thức" className="space-y-4">
-              <div>
-                <h2 className="font-display text-base font-semibold text-slate-900 dark:text-white">
-                  Bước 2: Chọn hoặc Quản lý Nhóm kiến thức — {getModuleTitle(selectedModule)}
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Chọn nhóm kiến thức để mở danh sách các phần tương ứng, hoặc thêm/sửa nhóm mới cho Mô-đun này.
-                </p>
+              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-base font-semibold text-slate-900 dark:text-white">
+                    Bước 2: Chọn hoặc Quản lý Nhóm kiến thức — {getModuleTitle(selectedModule)}
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Chọn nhóm kiến thức để mở danh sách các phần tương ứng, hoặc bật/tắt trạng thái sẵn sàng cho học sinh làm bài.
+                  </p>
+                  {!loading && categoryReadinessSummary.total > 0 && (
+                    <p
+                      data-testid="category-readiness-summary"
+                      className="text-xs font-medium text-slate-600 dark:text-slate-300 mt-1.5 tabular-nums"
+                    >
+                      Sẵn sàng cho học sinh:{' '}
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                        {categoryReadinessSummary.enabledCount}/{categoryReadinessSummary.total} nhóm
+                      </span>
+                      {categoryReadinessSummary.disabledCount > 0 && (
+                        <span className="text-amber-700 dark:text-amber-400">
+                          {' '}
+                          ({categoryReadinessSummary.disabledCount} nhóm đang tạm tắt)
+                        </span>
+                      )}
+                    </p>
+                  )}
+                </div>
+
+                {!loading && currentModuleCategories.length > 0 && (
+                  <div
+                    role="group"
+                    aria-label="Lọc nhóm kiến thức theo trạng thái sẵn sàng"
+                    className="inline-flex items-center bg-slate-200/70 dark:bg-slate-800/80 p-1 rounded-xl shrink-0 self-start sm:self-auto"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setCategoryStatusFilter('all')}
+                      className={`px-3 py-1 text-xs font-medium rounded-lg transition-all cursor-pointer ${
+                        categoryStatusFilter === 'all'
+                          ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      Tất cả ({categoryReadinessSummary.total})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCategoryStatusFilter('enabled')}
+                      className={`px-3 py-1 text-xs font-medium rounded-lg transition-all cursor-pointer ${
+                        categoryStatusFilter === 'enabled'
+                          ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-sm'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      Đã mở HS ({categoryReadinessSummary.enabledCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCategoryStatusFilter('disabled')}
+                      className={`px-3 py-1 text-xs font-medium rounded-lg transition-all cursor-pointer ${
+                        categoryStatusFilter === 'disabled'
+                          ? 'bg-white dark:bg-slate-900 text-amber-700 dark:text-amber-400 shadow-sm'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      Tạm tắt ({categoryReadinessSummary.disabledCount})
+                    </button>
+                  </div>
+                )}
               </div>
 
-              {currentModuleCategories.length === 0 ? (
+              {loading ? (
+                <CardGridSkeleton
+                  count={2}
+                  columnsClassName="grid-cols-1 md:grid-cols-2 gap-4"
+                  ariaLabel="Đang tải danh sách nhóm kiến thức..."
+                />
+              ) : currentModuleCategories.length === 0 ? (
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center space-y-3">
                   <p className="text-sm text-slate-500 dark:text-slate-400">
                     Mô-đun {getLevelForModule(selectedModule)} hiện chưa có nhóm kiến thức nào.
@@ -1594,9 +1777,22 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                     </button>
                   )}
                 </div>
+              ) : filteredModuleCategories.length === 0 ? (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-8 text-center space-y-3">
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Không có nhóm kiến thức nào ở trạng thái đã lọc.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setCategoryStatusFilter('all')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                  >
+                    Xem tất cả nhóm
+                  </button>
+                </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {currentModuleCategories.map((cat) => {
+                  {filteredModuleCategories.map((cat) => {
                     const catParts = knowledgeParts
                       .filter(
                         (p) =>
@@ -1618,11 +1814,19 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                     const isVirtual = cat.id.startsWith('virtual_cat_');
                     const canDelete =
                       !isVirtual && partCodes.length === 0 && catQuestions.length === 0;
+                    const isEnabled = isKnowledgeCategoryEnabled(cat);
+                    const toggleKey = `${cat.module}:${cat.code}`;
+                    const isToggling = togglingCategoryKey === toggleKey;
 
                     return (
                       <article
                         key={cat.code}
-                        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-blue-500 dark:hover:border-blue-500 rounded-xl flex flex-col justify-between transition-colors group"
+                        data-testid={`category-card-${cat.code}`}
+                        className={`border rounded-xl flex flex-col justify-between transition-colors group ${
+                          isEnabled
+                            ? 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-blue-500 dark:hover:border-blue-500'
+                            : 'bg-slate-50/90 dark:bg-slate-900/60 border-amber-200/80 dark:border-amber-900/60 hover:border-amber-400 dark:hover:border-amber-700'
+                        }`}
                       >
                         <button
                           type="button"
@@ -1637,22 +1841,114 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                               {partCodes.length} phần · {catQuestions.length} câu hỏi
                             </span>
                           </div>
-                          <h3 className="font-display text-base font-semibold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                            {cat.title}
-                          </h3>
+                          <div className="flex items-start justify-between gap-2">
+                            <h3
+                              className={`font-display text-base font-semibold transition-colors ${
+                                isEnabled
+                                  ? 'text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400'
+                                  : 'text-slate-700 dark:text-slate-300 group-hover:text-amber-700 dark:group-hover:text-amber-300'
+                              }`}
+                            >
+                              {cat.title}
+                            </h3>
+                          </div>
                           <p className="text-xs text-slate-600 dark:text-slate-400">
                             {cat.description || 'Chưa có mô tả cho nhóm kiến thức này.'}
                           </p>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 pt-1">
-                            Các phần hiện có:{' '}
-                            <span className="font-mono font-medium text-slate-700 dark:text-slate-300">
-                              {partCodes.length > 0 ? partCodes.join(', ') : 'Chưa có phần nào'}
+                          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
+                            <div className="text-slate-500 dark:text-slate-400">
+                              Các phần hiện có:{' '}
+                              <span
+                                className={
+                                  partCodes.length > 0
+                                    ? 'font-mono font-medium text-slate-700 dark:text-slate-300'
+                                    : 'italic text-slate-500 dark:text-slate-400'
+                                }
+                              >
+                                {partCodes.length > 0
+                                  ? partCodes
+                                      .map((pCode) => {
+                                        const pRec = catParts.find(
+                                          (p) =>
+                                            p.code.toUpperCase() === pCode.toUpperCase()
+                                        );
+                                        return pRec && !isKnowledgePartEnabled(pRec)
+                                          ? `${pCode} (Tạm tắt)`
+                                          : pCode;
+                                      })
+                                      .join(', ')
+                                  : 'Chưa có phần nào'}
+                              </span>
+                            </div>
+                            <span
+                              data-testid={`category-status-${cat.code}`}
+                              className={`inline-flex items-center gap-1 font-medium ${
+                                isEnabled
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : 'text-amber-700 dark:text-amber-400'
+                              }`}
+                            >
+                              {isEnabled ? (
+                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                              ) : (
+                                <PauseCircle className="w-3.5 h-3.5 shrink-0" />
+                              )}
+                              <span>
+                                {isEnabled
+                                  ? 'Sẵn sàng cho HS làm bài'
+                                  : 'Tạm tắt · Chưa mở HS'}
+                              </span>
                             </span>
                           </div>
                         </button>
 
-                        <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 text-xs">
-                          <div className="flex items-center gap-1.5">
+                        <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {canEdit && (
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={isEnabled}
+                                aria-label={
+                                  isEnabled
+                                    ? `Tạm tắt nhóm ${cat.code} cho học sinh`
+                                    : `Bật sẵn sàng nhóm ${cat.code} cho học sinh`
+                                }
+                                disabled={isToggling}
+                                onClick={() => handleToggleCategoryReadiness(cat)}
+                                className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-lg border font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer ${
+                                  isEnabled
+                                    ? 'border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/70'
+                                    : 'border-amber-200 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100/70 dark:hover:bg-amber-950/70'
+                                }`}
+                              >
+                                {isToggling ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                                ) : (
+                                  <span
+                                    aria-hidden="true"
+                                    className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
+                                      isEnabled
+                                        ? 'bg-emerald-600 dark:bg-emerald-500'
+                                        : 'bg-slate-400 dark:bg-slate-600'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                                        isEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
+                                      }`}
+                                    />
+                                  </span>
+                                )}
+                                <span>
+                                  {isToggling
+                                    ? 'Đang lưu...'
+                                    : isEnabled
+                                      ? 'Đang mở HS'
+                                      : 'Đang tắt'}
+                                </span>
+                              </button>
+                            )}
                             {canEdit && !isVirtual && (
                               <button
                                 type="button"
@@ -1680,7 +1976,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                                 <span>{deletingCategoryId === cat.id ? 'Đang xóa...' : 'Xóa'}</span>
                               </button>
                             )}
-                            {isVirtual && (
+                            {!canEdit && isVirtual && (
                               <span className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
                                 <Layers className="w-3.5 h-3.5" />
                                 <span>Danh sách phần {cat.code}</span>
@@ -1707,17 +2003,183 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
           {/* STEP 3: Parts inside selected Category (e.g. GM1, GM2 / OT1, OT2, OT3...) */}
           {selectedModule && selectedCategory && !selectedPartCode && (
             <section aria-label="Chọn Phần của nhóm kiến thức" className="space-y-4">
-              <div>
-                <h2 className="font-display text-base font-semibold text-slate-900 dark:text-white">
-                  Bước 3: Các phần của nhóm {selectedCategory} — {getModuleTitle(selectedModule)}
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Chọn một phần kiến thức (VD: {selectedCategory}1, {selectedCategory}2...) để quản lý ngân hàng câu hỏi và đánh số thứ tự câu.
-                </p>
+              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-base font-semibold text-slate-900 dark:text-white">
+                    Bước 3: Các phần của nhóm {selectedCategory} — {getModuleTitle(selectedModule)}
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Chọn một phần kiến thức (VD: {selectedCategory}1, {selectedCategory}2...) để quản lý ngân hàng câu hỏi, hoặc bật/tắt trạng thái sẵn sàng cho học sinh làm bài.
+                  </p>
+                  {!loading && partReadinessSummary.total > 0 && (
+                    <p
+                      data-testid="part-readiness-summary"
+                      className="text-xs font-medium text-slate-600 dark:text-slate-300 mt-1.5 tabular-nums"
+                    >
+                      Sẵn sàng cho học sinh:{' '}
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                        {partReadinessSummary.enabledCount}/{partReadinessSummary.total} phần
+                      </span>
+                      {partReadinessSummary.disabledCount > 0 && (
+                        <span className="text-amber-700 dark:text-amber-400">
+                          {' '}
+                          ({partReadinessSummary.disabledCount} phần đang tạm tắt)
+                        </span>
+                      )}
+                    </p>
+                  )}
+                </div>
+
+                {!loading && currentCategoryParts.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                    {canEdit && (
+                      <div
+                        role="group"
+                        aria-label={`Thao tác nhanh trạng thái tất cả phần nhóm ${selectedCategory}`}
+                        className="inline-flex items-center gap-1.5"
+                      >
+                        <button
+                          type="button"
+                          data-testid="parts-enable-all-btn"
+                          aria-label={`Bật tất cả phần thuộc nhóm ${selectedCategory} cho học sinh`}
+                          disabled={
+                            !partBatchToggleState.canEnableAll ||
+                            Boolean(batchTogglingParts) ||
+                            Boolean(togglingPartKey)
+                          }
+                          onClick={() => handleBatchToggleCategoryParts(true)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-950/70 disabled:opacity-45 disabled:cursor-not-allowed transition-colors whitespace-nowrap cursor-pointer"
+                        >
+                          {batchTogglingParts === 'enable' ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                          ) : (
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                          )}
+                          <span>
+                            {batchTogglingParts === 'enable'
+                              ? 'Đang bật...'
+                              : 'Bật tất cả'}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="parts-disable-all-btn"
+                          aria-label={`Tắt tất cả phần thuộc nhóm ${selectedCategory} cho học sinh`}
+                          disabled={
+                            !partBatchToggleState.canDisableAll ||
+                            Boolean(batchTogglingParts) ||
+                            Boolean(togglingPartKey)
+                          }
+                          onClick={() => handleBatchToggleCategoryParts(false)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-amber-200 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100/80 dark:hover:bg-amber-950/70 disabled:opacity-45 disabled:cursor-not-allowed transition-colors whitespace-nowrap cursor-pointer"
+                        >
+                          {batchTogglingParts === 'disable' ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                          ) : (
+                            <PauseCircle className="w-3.5 h-3.5 shrink-0" />
+                          )}
+                          <span>
+                            {batchTogglingParts === 'disable'
+                              ? 'Đang tắt...'
+                              : 'Tắt tất cả'}
+                          </span>
+                        </button>
+                      </div>
+                    )}
+
+                    <div
+                      role="group"
+                      aria-label="Lọc phần kiến thức theo trạng thái sẵn sàng"
+                      className="inline-flex items-center bg-slate-200/70 dark:bg-slate-800/80 p-1 rounded-xl shrink-0"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setPartStatusFilter('all')}
+                        className={`px-3 py-1 text-xs font-medium rounded-lg transition-all cursor-pointer ${
+                          partStatusFilter === 'all'
+                            ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        Tất cả ({partReadinessSummary.total})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPartStatusFilter('enabled')}
+                        className={`px-3 py-1 text-xs font-medium rounded-lg transition-all cursor-pointer ${
+                          partStatusFilter === 'enabled'
+                            ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-sm'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        Đã mở HS ({partReadinessSummary.enabledCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPartStatusFilter('disabled')}
+                        className={`px-3 py-1 text-xs font-medium rounded-lg transition-all cursor-pointer ${
+                          partStatusFilter === 'disabled'
+                            ? 'bg-white dark:bg-slate-900 text-amber-700 dark:text-amber-400 shadow-sm'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        Tạm tắt ({partReadinessSummary.disabledCount})
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {currentCategoryParts.map((part) => {
+              {selectedCategoryRecord && !isKnowledgeCategoryEnabled(selectedCategoryRecord) && (
+                <div
+                  role="status"
+                  className="rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/80 dark:bg-amber-950/30 px-4 py-2.5 text-xs text-amber-800 dark:text-amber-200 flex items-center justify-between gap-3"
+                >
+                  <span>
+                    Nhóm <strong>{selectedCategory}</strong> hiện đang ở trạng thái{' '}
+                    <strong>Tạm tắt</strong> (chưa mở cho học sinh làm bài). Bạn vẫn có thể soạn các phần và câu hỏi bên trong.
+                  </span>
+                </div>
+              )}
+
+              {loading ? (
+                <CardGridSkeleton
+                  count={6}
+                  columnsClassName="grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+                  ariaLabel="Đang tải danh sách các phần kiến thức..."
+                />
+              ) : currentCategoryParts.length === 0 ? (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center space-y-3">
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Nhóm {selectedCategory} hiện chưa có phần kiến thức nào.
+                  </p>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={openNewPartForm}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Thêm Phần {selectedCategory} đầu tiên</span>
+                    </button>
+                  )}
+                </div>
+              ) : filteredCategoryParts.length === 0 ? (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-8 text-center space-y-3">
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Không có phần kiến thức nào ở trạng thái đã lọc.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setPartStatusFilter('all')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                  >
+                    Xem tất cả phần
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredCategoryParts.map((part) => {
                   const qs = getPartQuestionsSorted(
                     db.questions,
                     selectedModule,
@@ -1727,11 +2189,19 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                   const isVirtual = part.id.startsWith('virtual_');
                   const minOrder = qs[0]?.topicOrder;
                   const maxOrder = qs[qs.length - 1]?.topicOrder;
+                  const isEnabled = isKnowledgePartEnabled(part);
+                  const toggleKey = `${part.module}:${part.category}:${part.code}`;
+                  const isToggling = togglingPartKey === toggleKey;
 
                   return (
                     <article
                       key={part.id}
-                      className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-blue-500 dark:hover:border-blue-500 rounded-xl transition-colors group flex flex-col justify-between"
+                      data-testid={`part-card-${part.code}`}
+                      className={`border rounded-xl transition-colors group flex flex-col justify-between ${
+                        isEnabled
+                          ? 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-blue-500 dark:hover:border-blue-500'
+                          : 'bg-slate-50/90 dark:bg-slate-900/60 border-amber-200/80 dark:border-amber-900/60 hover:border-amber-400 dark:hover:border-amber-700'
+                      }`}
                     >
                       <button
                         type="button"
@@ -1746,21 +2216,93 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                             {qs.length} câu hỏi
                           </span>
                         </div>
-                        <h3 className="font-display text-base font-semibold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                        <h3
+                          className={`font-display text-base font-semibold transition-colors ${
+                            isEnabled
+                              ? 'text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400'
+                              : 'text-slate-700 dark:text-slate-300 group-hover:text-amber-700 dark:group-hover:text-amber-300'
+                          }`}
+                        >
                           {part.title}
                         </h3>
                         <p className="text-xs text-slate-600 dark:text-slate-400">
                           {part.description || 'Chưa có mô tả cho phần kiến thức này.'}
                         </p>
-                        <div className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums pt-1">
-                          {qs.length > 0
-                            ? `Thứ tự câu: Câu ${minOrder} – Câu ${maxOrder}`
-                            : 'Chưa có câu hỏi nào'}
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
+                          <span className="text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+                            {qs.length > 0
+                              ? `Thứ tự câu: Câu ${minOrder} – Câu ${maxOrder}`
+                              : 'Chưa có câu hỏi nào'}
+                          </span>
+                          <span
+                            data-testid={`part-status-${part.code}`}
+                            className={`inline-flex items-center gap-1 font-medium ${
+                              isEnabled
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : 'text-amber-700 dark:text-amber-400'
+                            }`}
+                          >
+                            {isEnabled ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            ) : (
+                              <PauseCircle className="w-3.5 h-3.5 shrink-0" />
+                            )}
+                            <span>
+                              {isEnabled
+                                ? 'Sẵn sàng cho HS làm bài'
+                                : 'Tạm tắt · Chưa mở HS'}
+                            </span>
+                          </span>
                         </div>
                       </button>
 
-                      <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 text-xs">
-                        <div className="flex items-center gap-1.5">
+                      <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {canEdit && (
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={isEnabled}
+                              aria-label={
+                                isEnabled
+                                  ? `Tạm tắt phần ${part.code} cho học sinh`
+                                  : `Bật sẵn sàng phần ${part.code} cho học sinh`
+                              }
+                              disabled={isToggling || Boolean(batchTogglingParts)}
+                              onClick={() => handleTogglePartReadiness(part)}
+                              className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-lg border font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer ${
+                                isEnabled
+                                  ? 'border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/70'
+                                  : 'border-amber-200 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100/70 dark:hover:bg-amber-950/70'
+                              }`}
+                            >
+                              {isToggling ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                              ) : (
+                                <span
+                                  aria-hidden="true"
+                                  className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
+                                    isEnabled
+                                      ? 'bg-emerald-600 dark:bg-emerald-500'
+                                      : 'bg-slate-400 dark:bg-slate-600'
+                                  }`}
+                                >
+                                  <span
+                                    className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                                      isEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
+                                    }`}
+                                  />
+                                </span>
+                              )}
+                              <span>
+                                {isToggling
+                                  ? 'Đang lưu...'
+                                  : isEnabled
+                                    ? 'Đang mở HS'
+                                    : 'Đang tắt'}
+                              </span>
+                            </button>
+                          )}
                           {canEdit && !isVirtual && (
                             <button
                               type="button"
@@ -1801,7 +2343,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                     </article>
                   );
                 })}
-              </div>
+                </div>
+              )}
             </section>
           )}
 
@@ -1865,6 +2408,18 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                 )}
               </div>
 
+              {activePartMeta && !isKnowledgePartEnabled(activePartMeta) && (
+                <div
+                  role="status"
+                  className="rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/80 dark:bg-amber-950/30 px-4 py-2.5 text-xs text-amber-800 dark:text-amber-200 flex items-center justify-between gap-3"
+                >
+                  <span>
+                    Phần <strong>{selectedPartCode}</strong> hiện đang ở trạng thái{' '}
+                    <strong>Tạm tắt</strong> (chưa mở cho học sinh làm bài). Bạn vẫn có thể thêm, sửa và sắp xếp câu hỏi bên trong.
+                  </span>
+                </div>
+              )}
+
               {/* Filter Bar inside Part */}
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-12 gap-3">
                 <div className="sm:col-span-8 relative">
@@ -1885,7 +2440,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                   onChange={(e) => setTypeFilter(e.target.value as 'all' | QuestionType)}
                   className="sm:col-span-4 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950"
                 >
-                  <option value="all">Tất cả 5 dạng câu hỏi</option>
+                  <option value="all">Tất cả 6 dạng câu hỏi</option>
                   {Object.entries(QUESTION_TYPE_LABELS).map(([k, v]) => (
                     <option key={k} value={k}>
                       {v}
@@ -1980,7 +2535,14 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
               )}
 
               {/* Ordered Question List */}
-              <div className="space-y-4">
+              {loading ? (
+                <ListSkeleton
+                  variant="questionCard"
+                  rows={5}
+                  ariaLabel="Đang tải danh sách câu hỏi..."
+                />
+              ) : (
+                <div className="space-y-4">
                 {filteredPartQuestions.map((q, idx) => {
                   const isSelected = selectedQuestionIds.includes(q.id);
                   return (
@@ -2089,6 +2651,18 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                       )}
                     </div>
 
+                    {/* Optional Illustration Image (for non-hotspot types) */}
+                    {q.type !== 'hotspot' && 'imageUrl' in q.payload && q.payload.imageUrl && (
+                      <div className="pt-1">
+                        <img
+                          src={q.payload.imageUrl}
+                          alt={q.payload.imageAlt?.trim() || `Hình minh họa Câu ${q.topicOrder}`}
+                          referrerPolicy="no-referrer"
+                          className="max-h-64 w-auto max-w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 object-contain"
+                        />
+                      </div>
+                    )}
+
                     {/* Compact Answer Summary */}
                     <div className="text-xs text-slate-600 dark:text-slate-300 pt-2 border-t border-slate-100 dark:border-slate-800">
                       {q.type === 'single' && 'correctOptionId' in q.payload && (
@@ -2155,6 +2729,81 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                           })}
                         </div>
                       )}
+                      {q.type === 'matrix_choice' &&
+                        'slots' in q.payload &&
+                        'options' in q.payload && (() => {
+                          const matrixPayload = q.payload;
+                          return (
+                          <div className="space-y-2.5">
+                            {matrixPayload.templateText?.trim() && (
+                              <div className="space-y-1 text-slate-700 dark:text-slate-200 whitespace-pre-line leading-relaxed">
+                                {matrixPayload.templateText.split(/(_\(\d+\)_)/g).map((part, pIdx) =>
+                                  /^_\(\d+\)_$/.test(part) ? (
+                                    <span
+                                      key={pIdx}
+                                      className="font-mono font-bold text-red-600 dark:text-red-400 underline decoration-slate-400 mx-0.5"
+                                    >
+                                      {part.slice(1, -1)}
+                                    </span>
+                                  ) : (
+                                    <React.Fragment key={pIdx}>{part}</React.Fragment>
+                                  )
+                                )}
+                              </div>
+                            )}
+                            <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                              <table className="w-full text-[11px] border-collapse">
+                                <thead>
+                                  <tr className="bg-blue-600 text-white">
+                                    <th className="px-2.5 py-1.5 text-left font-semibold border-r border-blue-500/60 w-14">
+                                      Vị trí
+                                    </th>
+                                    {matrixPayload.options.map((opt) => (
+                                      <th
+                                        key={opt.id}
+                                        className="px-2.5 py-1.5 text-center font-semibold border-r border-blue-500/60 last:border-r-0"
+                                      >
+                                        {opt.text}
+                                      </th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-200 dark:divide-slate-800 bg-white dark:bg-slate-900">
+                                  {matrixPayload.slots.map((slot) => (
+                                    <tr key={slot.id}>
+                                      <td className="px-2.5 py-1.5 font-mono font-bold text-red-600 dark:text-red-400 border-r border-slate-200 dark:border-slate-800">
+                                        {slot.label}
+                                      </td>
+                                      {matrixPayload.options.map((opt) => {
+                                        const isCorrect = slot.correctOptionId === opt.id;
+                                        return (
+                                          <td
+                                            key={opt.id}
+                                            className={`px-2.5 py-1.5 text-center border-r border-slate-200 dark:border-slate-800 last:border-r-0 ${
+                                              isCorrect
+                                                ? 'bg-emerald-50/70 dark:bg-emerald-950/30'
+                                                : ''
+                                            }`}
+                                          >
+                                            <span
+                                              aria-label={isCorrect ? 'Đáp án đúng' : 'Không chọn'}
+                                              className={`inline-block w-3.5 h-3.5 rounded-full border align-middle ${
+                                                isCorrect
+                                                  ? 'border-emerald-600 bg-emerald-600 ring-2 ring-emerald-200 dark:ring-emerald-900'
+                                                  : 'border-slate-400 dark:border-slate-600'
+                                              }`}
+                                            />
+                                          </td>
+                                        );
+                                      })}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                          );
+                        })()}
                       {q.type === 'hotspot' && 'hotspotTarget' in q.payload && (
                         <div className="mt-2 max-w-2xl">
                           <HotspotCanvas
@@ -2192,10 +2841,17 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                     )}
                   </div>
                 )}
-              </div>
+                </div>
+              )}
             </section>
           )}
         </div>
+      ) : loading ? (
+        <CardGridSkeleton
+          count={4}
+          columnsClassName="grid-cols-1 md:grid-cols-2 gap-4"
+          ariaLabel="Đang tải danh sách bộ đề..."
+        />
       ) : (
         /* Question Sets Grid */
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2252,7 +2908,6 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
           availableModules={allModules}
           availableCategories={db.knowledgeCategories ?? []}
           availableParts={knowledgeParts}
-          serverSupabaseActive={serverDirectSupabase}
           onClose={() => setShowQuestionModal(false)}
           onSave={handleSaveQuestion}
         />
@@ -2437,7 +3092,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                   className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
                   {savingSet && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>{savingSet ? 'Đang lưu & đồng bộ...' : 'Lưu Bộ đề'}</span>
+                  <span>{savingSet ? 'Đang lưu...' : 'Lưu Bộ đề'}</span>
                 </button>
               </div>
             </form>
@@ -2581,7 +3236,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                   {savingModule && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                   <span>
                     {savingModule
-                      ? 'Đang lưu & đồng bộ...'
+                      ? 'Đang lưu...'
                       : editingModuleRecord
                         ? 'Cập nhật Mô-đun'
                         : 'Lưu Mô-đun mới'}
@@ -2685,6 +3340,33 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                   className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
                 />
               </div>
+              <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-3">
+                <label
+                  htmlFor="cat-enabled"
+                  className="flex items-start gap-2.5 cursor-pointer select-none"
+                >
+                  <input
+                    id="cat-enabled"
+                    type="checkbox"
+                    checked={categoryForm.isEnabled}
+                    onChange={(e) =>
+                      setCategoryForm({
+                        ...categoryForm,
+                        isEnabled: e.target.checked,
+                      })
+                    }
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                  />
+                  <span className="space-y-0.5">
+                    <span className="block text-xs font-semibold text-slate-900 dark:text-white">
+                      Sẵn sàng cho học sinh làm bài
+                    </span>
+                    <span className="block text-[11px] text-slate-500 dark:text-slate-400">
+                      Bật khi nhóm kiến thức đã đủ câu hỏi để học sinh làm bài; bỏ chọn để tạm tắt trong quá trình biên soạn.
+                    </span>
+                  </span>
+                </label>
+              </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -2705,7 +3387,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                   {savingCategory && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                   <span>
                     {savingCategory
-                      ? 'Đang lưu & đồng bộ...'
+                      ? 'Đang lưu...'
                       : editingCategoryRecord
                         ? 'Cập nhật Nhóm'
                         : 'Lưu Nhóm mới'}
@@ -2800,6 +3482,28 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                   className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
                 />
               </div>
+              <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-3">
+                <label
+                  htmlFor="new-part-enabled"
+                  className="flex items-start gap-2.5 cursor-pointer select-none"
+                >
+                  <input
+                    id="new-part-enabled"
+                    type="checkbox"
+                    checked={newPartEnabled}
+                    onChange={(e) => setNewPartEnabled(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                  />
+                  <span className="space-y-0.5">
+                    <span className="block text-xs font-semibold text-slate-900 dark:text-white">
+                      Sẵn sàng cho học sinh làm bài
+                    </span>
+                    <span className="block text-[11px] text-slate-500 dark:text-slate-400">
+                      Bật khi phần kiến thức đã đủ câu hỏi để học sinh làm bài; bỏ chọn để tạm tắt trong quá trình biên soạn.
+                    </span>
+                  </span>
+                </label>
+              </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -2820,7 +3524,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                   {savingPart && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                   <span>
                     {savingPart
-                      ? 'Đang lưu & đồng bộ...'
+                      ? 'Đang lưu...'
                       : editingPartRecord
                         ? 'Cập nhật Phần'
                         : 'Lưu Phần mới'}
@@ -2828,6 +3532,491 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Xuất Ngân hàng Câu hỏi */}
+      {SHOW_QUESTION_BANK_IMPORT_EXPORT && showExportModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="export-qb-modal-title"
+          className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4"
+          onClick={() => setShowExportModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-2xl shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800">
+              <div>
+                <h3
+                  id="export-qb-modal-title"
+                  className="font-display text-base font-semibold text-slate-900 dark:text-white"
+                >
+                  Xuất Ngân hàng Câu hỏi
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Tải về tệp Excel để soạn thảo hàng loạt hoặc tệp JSON sao lưu toàn bộ cấu trúc.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowExportModal(false)}
+                aria-label="Đóng hộp thoại xuất ngân hàng"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  1. Chọn phạm vi dữ liệu cần xuất
+                </div>
+                <div className="grid grid-cols-1 gap-2">
+                  <label className="flex items-start gap-3 p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/60 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="export-scope"
+                      checked={exportScopeMode === 'all'}
+                      onChange={() => setExportScopeMode('all')}
+                      className="mt-0.5"
+                    />
+                    <div className="text-xs">
+                      <div className="font-semibold text-slate-900 dark:text-white">
+                        Toàn bộ Ngân hàng Câu hỏi
+                      </div>
+                      <div className="text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
+                        {allModules.length} mô-đun · {db.questions.length} câu hỏi ·{' '}
+                        {db.questionSets.length} bộ đề
+                      </div>
+                    </div>
+                  </label>
+
+                  {selectedModule && (
+                    <label className="flex items-start gap-3 p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/60 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="export-scope"
+                        checked={exportScopeMode === 'current'}
+                        onChange={() => setExportScopeMode('current')}
+                        className="mt-0.5"
+                      />
+                      <div className="text-xs">
+                        <div className="font-semibold text-slate-900 dark:text-white">
+                          Chỉ nhánh đang xem ({getLevelForModule(selectedModule)}
+                          {selectedCategory ? ` · ${selectedCategory}` : ''}
+                          {selectedPartCode ? ` · ${selectedPartCode}` : ''})
+                        </div>
+                        <div className="text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
+                          {
+                            buildQuestionBankExportPackage(db, {
+                              module: selectedModule,
+                              category: selectedCategory ?? undefined,
+                              contentCode: selectedPartCode ?? undefined,
+                            }).questions.length
+                          }{' '}
+                          câu hỏi thuộc nhánh hiện tại
+                        </div>
+                      </div>
+                    </label>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  2. Chọn định dạng tệp tải xuống
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleExportFile('xlsx')}
+                    className="flex items-start gap-3 p-3.5 rounded-lg border border-emerald-300 dark:border-emerald-800 hover:border-emerald-500 dark:hover:border-emerald-500 bg-emerald-50/40 dark:bg-emerald-950/20 text-left transition-colors cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                        Tải tệp Excel (.xlsx)
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Đầy đủ cột đáp án A–D, bảng Bộ đề và sheet hướng dẫn.
+                      </p>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleExportFile('json')}
+                    className="flex items-start gap-3 p-3.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-blue-500 dark:hover:border-blue-500 bg-white dark:bg-slate-950 text-left transition-colors cursor-pointer"
+                  >
+                    <FileJson className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                        Tải tệp JSON (.json)
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Sao lưu trọn vẹn 4 tầng phân cấp, cả 6 dạng &amp; bộ đề.
+                      </p>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleExportFile('csv')}
+                    className="flex items-start gap-3 p-3.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-slate-400 dark:hover:border-slate-500 bg-white dark:bg-slate-950 text-left transition-colors cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-5 h-5 text-slate-600 dark:text-slate-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                        Tải tệp CSV (.csv)
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Chuẩn UTF-8 BOM nhẹ, mở nhanh trên mọi phần mềm bảng tính.
+                      </p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Nhập Ngân hàng Câu hỏi (Excel / JSON / CSV) */}
+      {SHOW_QUESTION_BANK_IMPORT_EXPORT && canEdit && showImportModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="import-qb-modal-title"
+          className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4"
+          onClick={() => {
+            if (!importingBank) setShowImportModal(false);
+          }}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800">
+              <div>
+                <h3
+                  id="import-qb-modal-title"
+                  className="font-display text-base font-semibold text-slate-900 dark:text-white"
+                >
+                  Nhập hàng loạt Câu hỏi từ Excel / JSON / CSV
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Tải lên file Excel (.xlsx, .xls), CSV hoặc JSON để kiểm tra trước và nhập thẳng vào hệ thống.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={importingBank}
+                onClick={() => setShowImportModal(false)}
+                aria-label="Đóng hộp thoại nhập ngân hàng"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-5">
+              {/* Khu vực tải file Excel/JSON/CSV & tải biểu mẫu */}
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                    1. Chọn tệp Excel (.xlsx, .xls) hoặc JSON / CSV
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadSampleFile('xlsx')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/50 whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      <span>Tải Excel mẫu (.xlsx)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadSampleFile('json')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <FileJson className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                      <span>JSON mẫu</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadSampleFile('csv')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-slate-500" />
+                      <span>CSV mẫu</span>
+                    </button>
+                  </div>
+                </div>
+
+                <label
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDraggingImportFile(true);
+                  }}
+                  onDragLeave={() => setIsDraggingImportFile(false)}
+                  onDrop={handleDropImportFile}
+                  className={`flex flex-col sm:flex-row items-center justify-between gap-3 p-4 rounded-xl border-2 border-dashed transition-colors cursor-pointer ${
+                    isDraggingImportFile
+                      ? 'border-blue-500 bg-blue-50/60 dark:bg-blue-950/30'
+                      : 'border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-950/50 hover:border-blue-400 dark:hover:border-blue-600'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-9 h-9 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+                      <Upload className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0 text-xs">
+                      <div className="font-semibold text-slate-900 dark:text-white truncate">
+                        {importFileName
+                          ? `Đã nạp tệp: ${importFileName}`
+                          : 'Kéo thả hoặc nhấn để chọn tệp Excel (.xlsx, .xls), CSV, JSON'}
+                      </div>
+                      <div className="text-slate-500 dark:text-slate-400 mt-0.5">
+                        Hỗ trợ các cột chuẩn (module, category, contentCode, type, prompt, optionA–F, correctAnswer...) hoặc tiêu đề tiếng Việt.
+                      </div>
+                    </div>
+                  </div>
+                  <span className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 whitespace-nowrap shrink-0">
+                    Chọn tệp
+                  </span>
+                  <input
+                    id="qb-import-file-input"
+                    type="file"
+                    accept=".xlsx,.xls,.json,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/json,text/csv"
+                    onChange={handleSelectImportFile}
+                    className="sr-only"
+                  />
+                </label>
+
+                {importExcelWorkbook && importExcelWorkbook.sheetNames.length > 1 && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
+                    <label
+                      htmlFor="qb-excel-sheet-select"
+                      className="text-xs font-medium text-slate-700 dark:text-slate-300"
+                    >
+                      Chọn Sheet dữ liệu câu hỏi trong file Excel:
+                    </label>
+                    <select
+                      id="qb-excel-sheet-select"
+                      value={importExcelSheet}
+                      onChange={(e) => setImportExcelSheet(e.target.value)}
+                      className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+                    >
+                      {importExcelWorkbook.sheetNames.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {!importExcelWorkbook && (
+                <div>
+                  <label
+                    htmlFor="qb-import-textarea"
+                    className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5"
+                  >
+                    Hoặc dán trực tiếp nội dung JSON / CSV vào đây
+                  </label>
+                  <textarea
+                    id="qb-import-textarea"
+                    rows={4}
+                    value={importRawText}
+                    onChange={(e) => {
+                      setImportExcelWorkbook(null);
+                      setImportExcelSheet('');
+                      setImportRawText(e.target.value);
+                      if (!e.target.value.trim()) setImportFileName('');
+                    }}
+                    placeholder='{"questions": [...]} hoặc dán nội dung CSV có cột type, prompt...'
+                    className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                  />
+                </div>
+              )}
+
+              {parsedImport && (
+                <div className="space-y-3">
+                  <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                        Xem trước dữ liệu hợp lệ
+                        {importExcelWorkbook && importExcelSheet
+                          ? ` (Sheet "${importExcelSheet}")`
+                          : ''}
+                      </div>
+                      {importExcelWorkbook && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setImportExcelWorkbook(null);
+                            setImportExcelSheet('');
+                            setImportFileName('');
+                          }}
+                          className="text-[11px] font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer"
+                        >
+                          Xóa tệp đang chọn
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600 dark:text-slate-300 tabular-nums">
+                      <span>{parsedImport.bundle.modules.length} mô-đun</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{parsedImport.bundle.knowledgeCategories.length} nhóm</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{parsedImport.bundle.knowledgeParts.length} phần</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="font-semibold text-blue-600 dark:text-blue-400">
+                        {parsedImport.bundle.questions.length} câu hỏi
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span>{parsedImport.bundle.questionSets.length} bộ đề</span>
+                    </div>
+
+                    {parsedImport.bundle.questions.length > 0 && (
+                      <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto bg-white dark:bg-slate-900">
+                        <table className="w-full text-left text-[11px]">
+                          <thead className="bg-slate-100/80 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300">
+                            <tr>
+                              <th className="px-2.5 py-1.5 font-semibold w-10">#</th>
+                              <th className="px-2.5 py-1.5 font-semibold whitespace-nowrap">Phân cấp</th>
+                              <th className="px-2.5 py-1.5 font-semibold whitespace-nowrap">Dạng</th>
+                              <th className="px-2.5 py-1.5 font-semibold">Nội dung câu hỏi</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                            {parsedImport.bundle.questions.slice(0, 5).map((q, i) => (
+                              <tr key={`${q.id}_${i}`}>
+                                <td className="px-2.5 py-1.5 tabular-nums text-slate-500">
+                                  {i + 1}
+                                </td>
+                                <td className="px-2.5 py-1.5 font-mono whitespace-nowrap text-slate-700 dark:text-slate-300">
+                                  {q.level} · {q.contentCode}
+                                </td>
+                                <td className="px-2.5 py-1.5 whitespace-nowrap text-slate-600 dark:text-slate-400">
+                                  {QUESTION_TYPE_LABELS[q.type]}
+                                </td>
+                                <td className="px-2.5 py-1.5 text-slate-900 dark:text-slate-100 max-w-xs truncate">
+                                  {q.prompt}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {parsedImport.bundle.questions.length > 5 && (
+                          <div className="px-2.5 py-1.5 text-[11px] text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800 tabular-nums">
+                            ...và {parsedImport.bundle.questions.length - 5} câu hỏi khác đã sẵn sàng nhập.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {parsedImport.errors.length > 0 && (
+                    <div
+                      role="alert"
+                      className="p-3 rounded-lg border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 text-xs text-red-700 dark:text-red-300 space-y-1 max-h-36 overflow-y-auto"
+                    >
+                      <div className="font-semibold">
+                        Phát hiện {parsedImport.errors.length} lỗi dữ liệu:
+                      </div>
+                      {parsedImport.errors.slice(0, 8).map((err, idx) => (
+                        <div key={idx}>{err}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  {parsedImport.warnings.length > 0 && parsedImport.errors.length === 0 && (
+                    <div className="p-3 rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 text-xs text-amber-800 dark:text-amber-300 space-y-1 max-h-24 overflow-y-auto">
+                      {parsedImport.warnings.slice(0, 4).map((w, idx) => (
+                        <div key={idx}>{w}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  2. Chế độ nhập dữ liệu
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="import-mode"
+                      checked={importMode === 'merge'}
+                      onChange={() => setImportMode('merge')}
+                      className="mt-0.5"
+                    />
+                    <div className="text-xs">
+                      <div className="font-semibold text-slate-900 dark:text-white">
+                        Gộp &amp; cập nhật (Khuyên dùng)
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Giữ dữ liệu hiện có, thêm mới và ghi đè các câu trùng ID.
+                      </p>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="import-mode"
+                      checked={importMode === 'replace'}
+                      onChange={() => setImportMode('replace')}
+                      className="mt-0.5"
+                    />
+                    <div className="text-xs">
+                      <div className="font-semibold text-red-700 dark:text-red-400">
+                        Thay thế toàn bộ ngân hàng
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Xóa câu hỏi &amp; bộ đề cũ không có trong tệp nhập.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-slate-200 dark:border-slate-800">
+              <button
+                type="button"
+                disabled={importingBank}
+                onClick={() => setShowImportModal(false)}
+                className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-50 cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                disabled={
+                  importingBank ||
+                  !parsedImport ||
+                  parsedImport.errors.length > 0 ||
+                  (parsedImport.bundle.questions.length === 0 &&
+                    parsedImport.bundle.modules.length === 0)
+                }
+                onClick={handleConfirmImport}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {importingBank && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>{importingBank ? 'Đang nhập...' : 'Xác nhận nhập dữ liệu'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

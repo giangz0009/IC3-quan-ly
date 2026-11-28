@@ -52,10 +52,24 @@ function loadLocalDb(): AdminDatabase {
     if (!Array.isArray(parsed.knowledgeCategories)) {
       parsed.knowledgeCategories = seed.knowledgeCategories;
       changed = true;
+    } else {
+      for (const cat of parsed.knowledgeCategories) {
+        if (typeof cat.isEnabled !== 'boolean') {
+          cat.isEnabled = true;
+          changed = true;
+        }
+      }
     }
     if (!Array.isArray(parsed.knowledgeParts)) {
       parsed.knowledgeParts = seed.knowledgeParts;
       changed = true;
+    } else {
+      for (const part of parsed.knowledgeParts) {
+        if (typeof part.isEnabled !== 'boolean') {
+          part.isEnabled = true;
+          changed = true;
+        }
+      }
     }
     if (!Array.isArray(parsed.teachers) || parsed.teachers.length === 0) {
       parsed.teachers = seed.teachers.map((t) => ({

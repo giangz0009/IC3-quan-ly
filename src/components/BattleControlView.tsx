@@ -15,10 +15,12 @@ import {
 import type { AdminDatabase, ClassBattleConfig } from '../types/ic3';
 import { api, type SafeTeacher } from '../utils/api';
 import { formatDuration } from '../utils/ic3Rules';
+import { ListSkeleton, TableSkeletonRows } from './TableSkeleton';
 
 interface BattleControlViewProps {
   db: Omit<AdminDatabase, 'teachers'>;
   currentTeacher: SafeTeacher;
+  loading?: boolean;
   onRefresh: () => Promise<void>;
   onNotify: (msg: string, isError?: boolean) => void;
 }
@@ -26,6 +28,7 @@ interface BattleControlViewProps {
 export const BattleControlView: React.FC<BattleControlViewProps> = ({
   db,
   currentTeacher,
+  loading = false,
   onRefresh,
   onNotify,
 }) => {
@@ -485,53 +488,68 @@ export const BattleControlView: React.FC<BattleControlViewProps> = ({
                     <th className="py-2 font-medium text-right">Kỹ năng & Hiệu ứng</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {sortedParticipants.map((p, index) => (
-                    <tr key={p.studentId} className="h-11">
-                      <td className="py-2 pr-3 font-mono text-xs font-semibold tabular-nums">
-                        #{index + 1}
-                      </td>
-                      <td className="py-2 pr-3">
-                        <div className="font-medium text-slate-900 dark:text-slate-100">
-                          {p.studentName}
-                        </div>
-                        <div className="text-[11px] font-mono text-slate-500">
-                          {p.studentCode}
-                        </div>
-                      </td>
-                      <td className="py-2 pr-3 font-mono text-xs tabular-nums">
-                        {p.answeredCount}/{activeRoom.questionIds.length} (đúng {p.correctCount})
-                      </td>
-                      <td className="py-2 pr-3 font-mono font-semibold tabular-nums">
-                        {p.score}
-                      </td>
-                      <td className="py-2 pr-3 font-mono text-xs tabular-nums text-slate-600 dark:text-slate-400">
-                        {formatDuration(p.durationSeconds)}
-                      </td>
-                      <td className="py-2 text-right text-xs">
-                        <span className="inline-flex items-center gap-1 font-mono text-slate-700 dark:text-slate-300">
-                          <Shield className="w-3.5 h-3.5 text-blue-600" />
-                          {p.shieldCharges}
-                        </span>
-                        {p.activeDebuffs.length > 0 && (
-                          <span className="ml-2 text-red-600 dark:text-red-400 font-medium">
-                            [{p.activeDebuffs.map((d) => d.type).join(', ')}]
+                {loading ? (
+                  <TableSkeletonRows
+                    rows={5}
+                    ariaLabel="Đang tải bảng xếp hạng phòng thi đấu..."
+                    columns={[
+                      { variant: 'mono', widths: ['w-8', 'w-10'], cellClassName: 'py-2 pr-3' },
+                      { variant: 'twoLine', widths: ['w-32', 'w-40', 'w-36'], cellClassName: 'py-2 pr-3' },
+                      { variant: 'mono', widths: ['w-20', 'w-24'], cellClassName: 'py-2 pr-3' },
+                      { variant: 'mono', widths: ['w-12', 'w-14'], cellClassName: 'py-2 pr-3' },
+                      { variant: 'mono', widths: ['w-14', 'w-16'], cellClassName: 'py-2 pr-3' },
+                      { variant: 'text', align: 'right', widths: ['w-16', 'w-20'], cellClassName: 'py-2 text-right' },
+                    ]}
+                  />
+                ) : (
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {sortedParticipants.map((p, index) => (
+                      <tr key={p.studentId} className="h-11">
+                        <td className="py-2 pr-3 font-mono text-xs font-semibold tabular-nums">
+                          #{index + 1}
+                        </td>
+                        <td className="py-2 pr-3">
+                          <div className="font-medium text-slate-900 dark:text-slate-100">
+                            {p.studentName}
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-500">
+                            {p.studentCode}
+                          </div>
+                        </td>
+                        <td className="py-2 pr-3 font-mono text-xs tabular-nums">
+                          {p.answeredCount}/{activeRoom.questionIds.length} (đúng {p.correctCount})
+                        </td>
+                        <td className="py-2 pr-3 font-mono font-semibold tabular-nums">
+                          {p.score}
+                        </td>
+                        <td className="py-2 pr-3 font-mono text-xs tabular-nums text-slate-600 dark:text-slate-400">
+                          {formatDuration(p.durationSeconds)}
+                        </td>
+                        <td className="py-2 text-right text-xs">
+                          <span className="inline-flex items-center gap-1 font-mono text-slate-700 dark:text-slate-300">
+                            <Shield className="w-3.5 h-3.5 text-blue-600" />
+                            {p.shieldCharges}
                           </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {sortedParticipants.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={6}
-                        className="py-8 text-center text-xs text-slate-500"
-                      >
-                        Chưa có học sinh tham gia phòng này.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
+                          {p.activeDebuffs.length > 0 && (
+                            <span className="ml-2 text-red-600 dark:text-red-400 font-medium">
+                              [{p.activeDebuffs.map((d) => d.type).join(', ')}]
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {sortedParticipants.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={6}
+                          className="py-8 text-center text-xs text-slate-500"
+                        >
+                          Chưa có học sinh tham gia phòng này.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                )}
               </table>
             </div>
           </section>
@@ -541,21 +559,31 @@ export const BattleControlView: React.FC<BattleControlViewProps> = ({
             <h3 className="font-display text-base font-semibold text-slate-900 dark:text-white pb-3 border-b border-slate-200 dark:border-slate-800">
               Nhật ký Sự kiện Realtime
             </h3>
-            <div className="mt-3 space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
-              {activeRoom.events.map((ev) => (
-                <div
-                  key={ev.id}
-                  className="text-xs pb-2.5 border-b border-slate-100 dark:border-slate-800/80 last:border-0"
-                >
-                  <div className="font-mono text-[11px] text-slate-400">
-                    {new Date(ev.createdAt).toLocaleTimeString('vi-VN')}
+            {loading ? (
+              <div className="mt-3">
+                <ListSkeleton
+                  variant="compact"
+                  rows={5}
+                  ariaLabel="Đang tải nhật ký sự kiện..."
+                />
+              </div>
+            ) : (
+              <div className="mt-3 space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
+                {activeRoom.events.map((ev) => (
+                  <div
+                    key={ev.id}
+                    className="text-xs pb-2.5 border-b border-slate-100 dark:border-slate-800/80 last:border-0"
+                  >
+                    <div className="font-mono text-[11px] text-slate-400">
+                      {new Date(ev.createdAt).toLocaleTimeString('vi-VN')}
+                    </div>
+                    <p className="text-slate-700 dark:text-slate-200 mt-0.5 leading-relaxed">
+                      {ev.message}
+                    </p>
                   </div>
-                  <p className="text-slate-700 dark:text-slate-200 mt-0.5 leading-relaxed">
-                    {ev.message}
-                  </p>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </aside>
         </div>
       ) : (

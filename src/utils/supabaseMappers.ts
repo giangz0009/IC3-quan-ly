@@ -237,6 +237,10 @@ export function mapQuestionBankRowsToDomain(input: {
       title: String(p.title || `Chuyên đề ${p.code || cat}`),
       description: String(p.description || ''),
       orderIndex: typeof p.order_index === 'number' ? p.order_index : 1,
+      isEnabled:
+        p.is_enabled === undefined || p.is_enabled === null
+          ? true
+          : Boolean(p.is_enabled),
     };
   });
 
@@ -262,6 +266,10 @@ export function mapQuestionBankRowsToDomain(input: {
       title: String(c.title || CATEGORY_LABELS[code]?.name || `Nhóm ${code}`),
       description: String(c.description ?? CATEGORY_LABELS[code]?.description ?? ''),
       orderIndex: typeof c.order_index === 'number' ? c.order_index : 1,
+      isEnabled:
+        c.is_enabled === undefined || c.is_enabled === null
+          ? true
+          : Boolean(c.is_enabled),
     };
   });
 

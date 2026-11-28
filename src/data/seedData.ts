@@ -71,11 +71,15 @@ create table if not exists public.knowledge_categories (
   title text not null,
   description text default '',
   order_index integer not null default 1,
+  is_enabled boolean not null default true,
   unique (module, code),
   constraint fk_knowledge_categories_module
     foreign key (module) references public.ic3_modules(code)
     on update cascade on delete restrict
 );
+
+alter table public.knowledge_categories
+  add column if not exists is_enabled boolean not null default true;
 
 create table if not exists public.knowledge_parts (
   id text primary key,
@@ -86,11 +90,15 @@ create table if not exists public.knowledge_parts (
   title text not null,
   description text default '',
   order_index integer not null default 1,
+  is_enabled boolean not null default true,
   unique (module, category, code),
   constraint fk_knowledge_parts_category
     foreign key (module, category) references public.knowledge_categories(module, code)
     on update cascade on delete restrict
 );
+
+alter table public.knowledge_parts
+  add column if not exists is_enabled boolean not null default true;
 
 create table if not exists public.questions (
   id text primary key,
@@ -100,7 +108,7 @@ create table if not exists public.questions (
   content_code text not null default 'GM1',
   topic_order integer not null default 1,
   topic text not null,
-  type text not null check (type in ('single', 'multiple', 'true_false', 'matching', 'hotspot')),
+  type text not null check (type in ('single', 'multiple', 'true_false', 'matching', 'hotspot', 'matrix_choice')),
   prompt text not null,
   instruction text,
   payload jsonb not null,
@@ -120,6 +128,9 @@ alter table public.questions
   add column if not exists topic_order integer not null default 1;
 alter table public.questions
   drop column if exists difficulty;
+alter table public.questions drop constraint if exists questions_type_check;
+alter table public.questions
+  add constraint questions_type_check check (type in ('single', 'multiple', 'true_false', 'matching', 'hotspot', 'matrix_choice'));
 
 create index if not exists idx_questions_part_order
   on public.questions (module, category, content_code, topic_order);
@@ -674,6 +685,7 @@ export function createSeedDatabase(): AdminDatabase {
         description:
           'Kiến thức nền tảng và dạng bài bám sát cấu trúc đề thi chuẩn GMetrix.',
         orderIndex: 1,
+        isEnabled: true,
       },
       {
         id: 'cat_lv1_ot',
@@ -683,6 +695,7 @@ export function createSeedDatabase(): AdminDatabase {
         description:
           'Chuyên đề ôn luyện mở rộng, bổ sung và tổng hợp theo từng phần.',
         orderIndex: 2,
+        isEnabled: true,
       },
       {
         id: 'cat_lv2_gm',
@@ -692,6 +705,7 @@ export function createSeedDatabase(): AdminDatabase {
         description:
           'Kiến thức nền tảng và dạng bài bám sát cấu trúc đề thi chuẩn GMetrix.',
         orderIndex: 1,
+        isEnabled: true,
       },
       {
         id: 'cat_lv2_ot',
@@ -701,6 +715,7 @@ export function createSeedDatabase(): AdminDatabase {
         description:
           'Chuyên đề ôn luyện mở rộng, bổ sung và tổng hợp theo từng phần.',
         orderIndex: 2,
+        isEnabled: true,
       },
       {
         id: 'cat_lv3_gm',
@@ -710,6 +725,7 @@ export function createSeedDatabase(): AdminDatabase {
         description:
           'Kiến thức nền tảng và dạng bài bám sát cấu trúc đề thi chuẩn GMetrix.',
         orderIndex: 1,
+        isEnabled: true,
       },
       {
         id: 'cat_lv3_ot',
@@ -719,6 +735,7 @@ export function createSeedDatabase(): AdminDatabase {
         description:
           'Chuyên đề ôn luyện mở rộng, bổ sung và tổng hợp theo từng phần.',
         orderIndex: 2,
+        isEnabled: true,
       },
     ],
     knowledgeParts: [
@@ -731,6 +748,7 @@ export function createSeedDatabase(): AdminDatabase {
         title: 'Phần cứng, Bộ nhớ & Thiết bị ngoại vi',
         description: 'Phân loại RAM/ROM/SSD, thiết bị nhập xuất cơ bản.',
         orderIndex: 1,
+        isEnabled: true,
       },
       {
         id: 'part_lv1_gm2',
@@ -741,6 +759,7 @@ export function createSeedDatabase(): AdminDatabase {
         title: 'Cổng kết nối & Giao tiếp phần cứng',
         description: 'HDMI, USB-C, RJ-45 Ethernet và thiết bị mạng.',
         orderIndex: 2,
+        isEnabled: true,
       },
       {
         id: 'part_lv1_ot1',
@@ -751,6 +770,7 @@ export function createSeedDatabase(): AdminDatabase {
         title: 'Quản lý Tệp tin & Hệ điều hành Windows',
         description: 'Thao tác tệp, phím tắt xóa vĩnh viễn và đặt tên hợp lệ.',
         orderIndex: 1,
+        isEnabled: true,
       },
       {
         id: 'part_lv1_ot2',
@@ -761,6 +781,7 @@ export function createSeedDatabase(): AdminDatabase {
         title: 'Thực hành Nhận diện Cổng máy tính',
         description: 'Bài tập Hotspot nhận diện cổng mặt sau I/O.',
         orderIndex: 2,
+        isEnabled: true,
       },
       {
         id: 'part_lv2_gm1',
@@ -771,6 +792,7 @@ export function createSeedDatabase(): AdminDatabase {
         title: 'Microsoft Word & Thanh công cụ Ribbon',
         description: 'Sao chép định dạng Format Painter, nhóm Clipboard và Font.',
         orderIndex: 1,
+        isEnabled: true,
       },
       {
         id: 'part_lv2_gm2',
@@ -781,6 +803,7 @@ export function createSeedDatabase(): AdminDatabase {
         title: 'Microsoft Excel & Hàm tính toán',
         description: 'Merge & Center, hàm COUNT, COUNTA, SUM cơ bản.',
         orderIndex: 2,
+        isEnabled: true,
       },
       {
         id: 'part_lv2_ot1',
@@ -791,6 +814,7 @@ export function createSeedDatabase(): AdminDatabase {
         title: 'Microsoft PowerPoint & Trình chiếu',
         description: 'Slide Master, phím trình chiếu và hiệu ứng Transition.',
         orderIndex: 1,
+        isEnabled: true,
       },
       {
         id: 'part_lv3_gm1',
@@ -801,6 +825,7 @@ export function createSeedDatabase(): AdminDatabase {
         title: 'Trình duyệt Web & Chứng chỉ HTTPS',
         description: 'Nhận diện kết nối bảo mật SSL/TLS trên thanh địa chỉ.',
         orderIndex: 1,
+        isEnabled: true,
       },
       {
         id: 'part_lv3_gm2',
@@ -811,6 +836,7 @@ export function createSeedDatabase(): AdminDatabase {
         title: 'Thư điện tử (Email) & Quy tắc Cc/Bcc',
         description: 'Gửi email nhóm bảo mật danh sách người nhận.',
         orderIndex: 2,
+        isEnabled: true,
       },
       {
         id: 'part_lv3_ot1',
@@ -821,6 +847,7 @@ export function createSeedDatabase(): AdminDatabase {
         title: 'Phòng chống Lừa đảo (Phishing) & Công dân số',
         description: 'Nhận diện email giả mạo, liên kết độc hại và bảo mật tài khoản.',
         orderIndex: 1,
+        isEnabled: true,
       },
     ],
     questions: [
@@ -1159,12 +1186,50 @@ export function createSeedDatabase(): AdminDatabase {
         createdAt: now,
         updatedAt: now,
       },
+      {
+        id: 'q_lo_matrix_01',
+        module: 'living_online',
+        level: 'LV3',
+        category: 'GM',
+        contentCode: 'GM1',
+        topicOrder: 2,
+        topic: 'Toán tử tìm kiếm trực tuyến (Boolean)',
+        type: 'matrix_choice',
+        prompt:
+          'Bạn đang thực hiện một nghiên cứu trên nền tảng trực tuyến. Khi nào bạn nên sử dụng toán tử tìm kiếm (Boolean)? Hoàn thành các câu sau đây bằng cách lựa chọn đúng tùy chọn cho từng chỗ trống.',
+        instruction:
+          'Hoàn thành các chỗ trống (1), (2)... bằng cách chọn đáp án đúng cho từng dòng trong bảng.',
+        payload: {
+          templateText:
+            'Để _(1)_ kết quả tìm kiếm sử dụng phương pháp _(2)_ bằng cách sử dụng toán tử AND\nĐể _(3)_ kết quả tìm kiếm sử dụng phương pháp _(4)_ bằng cách sử dụng toán tử OR\nĐể _(5)_ kết quả tìm kiếm sử dụng phương pháp _(6)_ bằng cách sử dụng toán tử NOT',
+          options: [
+            { id: 'opt_1', text: 'Mở rộng' },
+            { id: 'opt_2', text: 'Thu hẹp' },
+            { id: 'opt_3', text: 'Bao gồm nhiều lựa chọn thay thế tìm kiếm' },
+            { id: 'opt_4', text: 'Kết hợp các thuật ngữ' },
+            { id: 'opt_5', text: 'Loại trừ' },
+          ],
+          slots: [
+            { id: 'slot_1', label: '(1)', correctOptionId: 'opt_2' },
+            { id: 'slot_2', label: '(2)', correctOptionId: 'opt_4' },
+            { id: 'slot_3', label: '(3)', correctOptionId: 'opt_1' },
+            { id: 'slot_4', label: '(4)', correctOptionId: 'opt_3' },
+            { id: 'slot_5', label: '(5)', correctOptionId: 'opt_2' },
+            { id: 'slot_6', label: '(6)', correctOptionId: 'opt_5' },
+          ],
+        },
+        explanation:
+          'AND thu hẹp phạm vi bằng cách kết hợp các thuật ngữ bắt buộc cùng xuất hiện; OR mở rộng phạm vi với nhiều lựa chọn thay thế; NOT thu hẹp bằng cách loại trừ từ khóa.',
+        tips: 'AND = giao (thu hẹp), OR = hợp (mở rộng), NOT = loại trừ (thu hẹp).',
+        createdAt: now,
+        updatedAt: now,
+      },
     ],
     questionSets: [
       {
         id: 'set_lv1_gm1',
         title: 'LV1 — GMetrix Nền tảng Phần cứng & Hệ điều hành',
-        description: 'Tổng hợp 5 dạng câu hỏi trọng tâm Máy tính căn bản chuẩn GMetrix.',
+        description: 'Tổng hợp các dạng câu hỏi trọng tâm Máy tính căn bản chuẩn GMetrix.',
         level: 'LV1',
         category: 'GM',
         contentCode: 'GM1',
@@ -1208,7 +1273,7 @@ export function createSeedDatabase(): AdminDatabase {
       {
         id: 'set_battle_all',
         title: 'Bộ đề Thi đấu Tổng hợp IC3 (10 câu)',
-        description: 'Phối hợp đều LV1 – LV2 – LV3 với đủ 5 dạng câu hỏi tốc độ cao.',
+        description: 'Phối hợp đều LV1 – LV2 – LV3 với đầy đủ 6 dạng câu hỏi tốc độ cao.',
         level: 'LV1',
         category: 'OT',
         contentCode: 'Tổng hợp',

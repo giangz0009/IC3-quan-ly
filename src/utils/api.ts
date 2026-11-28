@@ -5,7 +5,10 @@ import type {
   BattleRoomState,
   ClassBattleConfig,
   ClassTaskConfig,
+  IC3Level,
+  IC3Module,
   IC3ModuleRecord,
+  KnowledgeCategory,
   KnowledgeCategoryRecord,
   KnowledgePart,
   Question,
@@ -336,6 +339,19 @@ export const api = {
     });
   },
 
+  batchImportClasses(
+    schoolId: string,
+    rows: Array<{ name: string; grade: string }>
+  ) {
+    return request<{ created: SchoolClass[]; skipped: string[] }>(
+      '/api/classes/batch',
+      {
+        method: 'POST',
+        body: JSON.stringify({ schoolId, rows }),
+      }
+    );
+  },
+
   createStudent(payload: {
     classId: string;
     fullName: string;
@@ -350,7 +366,10 @@ export const api = {
 
   batchImportStudents(
     classId: string,
-    rows: Array<{ fullName: string; studentCode: string }>
+    rows: Array<{
+      fullName: string;
+      studentCode?: string;
+    }>
   ) {
     return request<{ created: StudentProfile[]; skipped: string[] }>(
       '/api/students/batch',
@@ -414,7 +433,9 @@ export const api = {
   },
 
   createKnowledgeCategory(
-    payload: Omit<KnowledgeCategoryRecord, 'id' | 'orderIndex'>
+    payload: Omit<KnowledgeCategoryRecord, 'id' | 'orderIndex' | 'isEnabled'> & {
+      isEnabled?: boolean;
+    }
   ) {
     return request<KnowledgeCategoryRecord>('/api/knowledge-categories', {
       method: 'POST',
@@ -424,7 +445,9 @@ export const api = {
 
   updateKnowledgeCategory(
     id: string,
-    payload: Partial<Pick<KnowledgeCategoryRecord, 'title' | 'description'>>
+    payload: Partial<
+      Pick<KnowledgeCategoryRecord, 'title' | 'description' | 'isEnabled'>
+    >
   ) {
     return request<KnowledgeCategoryRecord>(`/api/knowledge-categories/${id}`, {
       method: 'PUT',
@@ -438,7 +461,11 @@ export const api = {
     });
   },
 
-  createKnowledgePart(payload: Omit<KnowledgePart, 'id' | 'orderIndex'>) {
+  createKnowledgePart(
+    payload: Omit<KnowledgePart, 'id' | 'orderIndex' | 'isEnabled'> & {
+      isEnabled?: boolean;
+    }
+  ) {
     return request<KnowledgePart>('/api/knowledge-parts', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -447,7 +474,7 @@ export const api = {
 
   updateKnowledgePart(
     id: string,
-    payload: Partial<Pick<KnowledgePart, 'title' | 'description'>>
+    payload: Partial<Pick<KnowledgePart, 'title' | 'description' | 'isEnabled'>>
   ) {
     return request<KnowledgePart>(`/api/knowledge-parts/${id}`, {
       method: 'PUT',
@@ -458,6 +485,28 @@ export const api = {
   deleteKnowledgePart(id: string) {
     return request<{ ok: boolean }>(`/api/knowledge-parts/${id}`, {
       method: 'DELETE',
+    });
+  },
+
+  batchToggleKnowledgePartsReadiness(payload: {
+    module: IC3Module;
+    level?: IC3Level;
+    category: KnowledgeCategory;
+    isEnabled: boolean;
+    virtualParts?: Array<{
+      code: string;
+      title?: string;
+      description?: string;
+    }>;
+  }) {
+    return request<{
+      ok: boolean;
+      updatedCount: number;
+      isEnabled: boolean;
+      parts: KnowledgePart[];
+    }>('/api/knowledge-parts/batch-readiness', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   },
 
@@ -523,6 +572,7 @@ export const api = {
     knowledgeParts: KnowledgePart[];
     questions: Question[];
     questionSets?: QuestionSet[];
+    mode?: 'merge' | 'replace';
   }) {
     return request<{
       ok: boolean;
